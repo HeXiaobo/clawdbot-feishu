@@ -230,6 +230,66 @@ async function updateRecord(
   };
 }
 
+async function deleteRecord(
+  client: ReturnType<typeof createFeishuClient>,
+  appToken: string,
+  tableId: string,
+  recordId: string,
+) {
+  const res = await client.bitable.appTableRecord.delete({
+    path: { app_token: appToken, table_id: tableId, record_id: recordId },
+  });
+  if (res.code !== 0) throw new Error(res.msg);
+
+  return {
+    success: true,
+    record_id: recordId,
+  };
+}
+
+async function batchDeleteRecords(
+  client: ReturnType<typeof createFeishuClient>,
+  appToken: string,
+  tableId: string,
+  recordIds: string[],
+) {
+  const res = await client.bitable.appTableRecord.batchDelete({
+    path: { app_token: appToken, table_id: tableId },
+    data: { records: recordIds.map((id) => ({ id })) },
+  });
+  if (res.code !== 0) throw new Error(res.msg);
+
+  return {
+    success: true,
+    deleted_count: recordIds.length,
+    record_ids: recordIds,
+  };
+}
+
+async function createTable(
+  client: ReturnType<typeof createFeishuClient>,
+  appToken: string,
+  tableName: string,
+  description?: string,
+) {
+  const res = await client.bitable.appTable.create({
+    path: { app_token: appToken },
+    data: {
+      table: {
+        name: tableName,
+        ...(description && { description }),
+      },
+    },
+  });
+  if (res.code !== 0) throw new Error(res.msg);
+
+  return {
+    table_id: res.data?.table_id,
+    name: res.data?.name,
+    created_time: res.data?.created_time,
+  };
+}
+
 // ============ Schemas ============
 
 const GetMetaSchema = Type.Object({
@@ -285,6 +345,32 @@ const UpdateRecordSchema = Type.Object({
   fields: Type.Record(Type.String(), Type.Any(), {
     description: "Field values to update (same format as create_record)",
   }),
+});
+
+const DeleteRecordSchema = Type.Object({
+  app_token: Type.String({
+    description: "Bitable app token (use feishu_bitable_get_meta to get from URL)",
+  }),
+  table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
+  record_id: Type.String({ description: "Record ID to delete" }),
+});
+
+const BatchDeleteRecordsSchema = Type.Object({
+  app_token: Type.String({
+    description: "Bitable app token (use feishu_bitable_get_meta to get from URL)",
+  }),
+  table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
+  record_ids: Type.Array(Type.String(), {
+    description: "Array of record IDs to delete",
+  }),
+});
+
+const CreateTableSchema = Type.Object({
+  app_token: Type.String({
+    description: "Bitable app token (use feishu_bitable_get_meta to get from URL)",
+  }),
+  name: Type.String({ description: "Table name" }),
+  description: Type.Optional(Type.String({ description: "Optional table description" })),
 });
 
 // ============ Tool Registration ============
@@ -437,5 +523,77 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     { name: "feishu_bitable_update_record" },
   );
 
-  api.logger.info?.(`feishu_bitable: Registered 6 bitable tools`);
+  // Tool 6: feishu_bitable_delete_record
+  api.registerTool(
+    {
+      name: "feishu_bitable_delete_record",
+      label: "Feishu Bitable Delete Record",
+      description: "Delete a single record (row) from a Bitable table",
+      parameters: DeleteRecordSchema,
+      async execute(_toolCallId, params) {
+        const { app_token, table_id, record_id } = params as {
+          app_token: string;
+          table_id: string;
+          record_id: string;
+        };
+        try {
+          const result = await deleteRecord(getClient(), app_token, table_id, record_id);
+          return json(result);
+        } catch (err) {
+          return json({ error: err instanceof Error ? err.message : String(err) });
+        }
+      },
+    },
+    { name: "feishu_bitable_delete_record" },
+  );
+
+  // Tool 7: feishu_bitable_batch_delete_records
+  api.registerTool(
+    {
+      name: "feishu_bitable_batch_delete_records",
+      label: "Feishu Bitable Batch Delete Records",
+      description: "Delete multiple records (rows) from a Bitable table at once",
+      parameters: BatchDeleteRecordsSchema,
+      async execute(_toolCallId, params) {
+        const { app_token, table_id, record_ids } = params as {
+          app_token: string;
+          table_id: string;
+          record_ids: string[];
+        };
+        try {
+          const result = await batchDeleteRecords(getClient(), app_token, table_id, record_ids);
+          return json(result);
+        } catch (err) {
+          return json({ error: err instanceof Error ? err.message : String(err) });
+        }
+      },
+    },
+    { name: "feishu_bitable_batch_delete_records" },
+  );
+
+  // Tool 8: feishu_bitable_create_table
+  api.registerTool(
+    {
+      name: "feishu_bitable_create_table",
+      label: "Feishu Bitable Create Table",
+      description: "Create a new table in an existing Bitable app",
+      parameters: CreateTableSchema,
+      async execute(_toolCallId, params) {
+        const { app_token, name, description } = params as {
+          app_token: string;
+          name: string;
+          description?: string;
+        };
+        try {
+          const result = await createTable(getClient(), app_token, name, description);
+          return json(result);
+        } catch (err) {
+          return json({ error: err instanceof Error ? err.message : String(err) });
+        }
+      },
+    },
+    { name: "feishu_bitable_create_table" },
+  );
+
+  api.logger.info?.(`feishu_bitable: Registered 9 bitable tools`);
 }

@@ -147,6 +147,97 @@ async function deleteFile(client: Lark.Client, fileToken: string, type: string) 
   };
 }
 
+async function downloadFile(client: Lark.Client, fileToken: string, fileName?: string) {
+  // Get file info first to determine the file name and type
+  const fileInfoRes = await client.drive.file.get({
+    path: { file_token: fileToken },
+  });
+  
+  if (fileInfoRes.code !== 0) {
+    throw new Error(`Failed to get file info: ${fileInfoRes.msg}`);
+  }
+  
+  const fileInfo = fileInfoRes.data?.file;
+  if (!fileInfo) {
+    throw new Error("File not found");
+  }
+  
+  // Only support sheet type
+  if (fileInfo.type !== "sheet") {
+    throw new Error(`This download only supports Sheet (电子表格) files. Current type: ${fileInfo.type}. Please use feishu_bitable for Bitable files.`);
+  }
+  
+  const actualFileName = fileName || fileInfo.name || `sheet_${fileToken}`;
+  
+  // For Sheet (电子表格), use the spreadsheet export API
+  const domain = (client as any).domain ?? "https://open.feishu.cn";
+  
+  // Create export task for sheet
+  const exportRes = await (client as any).httpInstance.post(
+    `${domain}/open-apis/sheets/v2/spreadsheets/${fileToken}/export`,
+    {
+      export_format: "xlsx",  // Export as Excel format
+    }
+  );
+  
+  if (exportRes.code !== 0) {
+    throw new Error(`Failed to create sheet export task: ${exportRes.msg}`);
+  }
+  
+  const taskId = exportRes.data?.ticket;
+  if (!taskId) {
+    throw new Error("No export task ID returned from sheet export");
+  }
+  
+  // Poll for export completion
+  let retries = 20;
+  while (retries > 0) {
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    
+    const resultRes = await (client as any).httpInstance.get(
+      `${domain}/open-apis/drive/v1/export_tasks/${taskId}`
+    );
+    
+    if (resultRes.code === 0 && resultRes.data?.result?.file_token) {
+      // Export complete, download the file
+      const downloadRes = await (client as any).httpInstance.get(
+        `${domain}/open-apis/drive/v1/files/${resultRes.data.result.file_token}/download`,
+        { responseType: 'arraybuffer' }
+      );
+      
+      // Save to temp file
+      const fs = await import('fs');
+      const path = await import('path');
+      const os = await import('os');
+      
+      const tempDir = os.tmpdir();
+      const safeFileName = actualFileName.replace(/[^a-zA-Z0-9.-]/g, '_');
+      const finalFileName = safeFileName.endsWith('.xlsx') ? safeFileName : `${safeFileName}.xlsx`;
+      const tempPath = path.join(tempDir, `feishu_sheet_${fileToken}_${finalFileName}`);
+      
+      fs.writeFileSync(tempPath, Buffer.from(downloadRes.data));
+      
+      return {
+        file_token: fileToken,
+        file_name: actualFileName,
+        file_type: "sheet",
+        local_path: tempPath,
+        size: Buffer.from(downloadRes.data).length,
+        export_format: "xlsx",
+      };
+    }
+    
+    // Check if export failed
+    if (resultRes.data?.status === "failed") {
+      throw new Error(`Sheet export failed: ${resultRes.data?.error || 'Unknown error'}`);
+    }
+    
+    retries--;
+  }
+  
+  throw new Error("Sheet export task timeout (30s)");
+}
+
 // ============ Tool Registration ============
 
 export function registerFeishuDriveTools(api: OpenClawPluginApi) {
@@ -175,7 +266,7 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
       name: "feishu_drive",
       label: "Feishu Drive",
       description:
-        "Feishu cloud storage operations. Actions: list, info, create_folder, move, delete",
+        "Feishu cloud storage operations. Actions: list, info, create_folder, move, delete, download (Sheet only)",
       parameters: FeishuDriveSchema,
       async execute(_toolCallId, params) {
         const p = params as FeishuDriveParams;
@@ -192,6 +283,8 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
               return json(await moveFile(client, p.file_token, p.type, p.folder_token));
             case "delete":
               return json(await deleteFile(client, p.file_token, p.type));
+            case "download":
+              return json(await downloadFile(client, p.file_token, p.file_name));
             default:
               return json({ error: `Unknown action: ${(p as any).action}` });
           }

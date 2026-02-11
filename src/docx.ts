@@ -6,6 +6,15 @@ import type * as Lark from "@larksuiteoapi/node-sdk";
 import { Readable } from "stream";
 import { FeishuDocSchema, type FeishuDocParams } from "./doc-schema.js";
 import { resolveToolsConfig } from "./tools-config.js";
+import {
+  BLOCK_TYPE_NAMES,
+  LANGUAGE_MAP,
+  type DocBlock,
+} from "./docx-blocks.js";
+import {
+  convertMarkdownToBlocks,
+  preprocessMarkdown,
+} from "./markdown-converter.js";
 
 // ============ Helpers ============
 
@@ -30,116 +39,171 @@ function extractImageUrls(markdown: string): string[] {
   return urls;
 }
 
-const BLOCK_TYPE_NAMES: Record<number, string> = {
-  1: "Page",
-  2: "Text",
-  3: "Heading1",
-  4: "Heading2",
-  5: "Heading3",
-  12: "Bullet",
-  13: "Ordered",
-  14: "Code",
-  15: "Quote",
-  17: "Todo",
-  18: "Bitable",
-  21: "Diagram",
-  22: "Divider",
-  23: "File",
-  27: "Image",
-  30: "Sheet",
-  31: "Table",
-  32: "TableCell",
-};
-
 // Block types that cannot be created via documentBlockChildren.create API
-const UNSUPPORTED_CREATE_TYPES = new Set([31, 32]);
+// Table (24) and TableCell (25) are not supported for creation via API
+const UNSUPPORTED_CREATE_TYPES = new Set([24, 25]);
 
 /**
- * Reorder blocks according to firstLevelBlockIds from convertMarkdown API.
- * The API returns blocks as an unordered array; firstLevelBlockIds provides
- * the correct document order. Blocks not in the ordering list are appended at the end.
+ * Clean blocks for insertion (remove unsupported types and read-only fields)
+ * Also handles conversion of table blocks to text representations
  */
-function reorderBlocks(blocks: any[], firstLevelBlockIds: string[]): any[] {
-  if (!firstLevelBlockIds || firstLevelBlockIds.length === 0) return blocks;
-  
-  const blockMap = new Map<string, any>();
-  for (const block of blocks) {
-    if (block.block_id) {
-      blockMap.set(block.block_id, block);
-    }
-  }
-  
-  const ordered: any[] = [];
-  for (const id of firstLevelBlockIds) {
-    const block = blockMap.get(id);
-    if (block) {
-      ordered.push(block);
-      blockMap.delete(id);
-    }
-  }
-  
-  // Append any remaining blocks not in the ordering list
-  for (const block of blockMap.values()) {
-    ordered.push(block);
-  }
-  
-  return ordered;
-}
-
-/** Clean blocks for insertion (remove unsupported types and read-only fields) */
-function cleanBlocksForInsert(blocks: any[]): { cleaned: any[]; skipped: string[] } {
+function cleanBlocksForInsert(blocks: any[]): { cleaned: any[]; skipped: string[]; warnings: string[] } {
   const skipped: string[] = [];
-  const cleaned = blocks
-    .filter((block) => {
-      if (UNSUPPORTED_CREATE_TYPES.has(block.block_type)) {
-        const typeName = BLOCK_TYPE_NAMES[block.block_type] || `type_${block.block_type}`;
-        skipped.push(typeName);
-        return false;
-      }
-      return true;
-    })
-    .map((block) => {
-      if (block.block_type === 31 && block.table?.merge_info) {
-        const { merge_info, ...tableRest } = block.table;
-        return { ...block, table: tableRest };
-      }
-      return block;
-    });
-  return { cleaned, skipped };
+  const warnings: string[] = [];
+  const cleaned: any[] = [];
+
+  for (const block of blocks) {
+    if (UNSUPPORTED_CREATE_TYPES.has(block.block_type)) {
+      const typeName = BLOCK_TYPE_NAMES[block.block_type] || `type_${block.block_type}`;
+      skipped.push(typeName);
+      warnings.push(`Skipped unsupported block type: ${typeName}`);
+      continue;
+    }
+
+    // Clean up block structure
+    let cleanedBlock = { ...block };
+
+    // Remove read-only fields
+    delete cleanedBlock.block_id;
+    delete cleanedBlock.parent_id;
+    delete cleanedBlock.children;
+    delete cleanedBlock.document_id;
+
+    // Handle table merge_info
+    if (cleanedBlock.block_type === 24 && cleanedBlock.table?.merge_info) {
+      const { merge_info, ...tableRest } = cleanedBlock.table;
+      cleanedBlock = { ...cleanedBlock, table: tableRest };
+    }
+
+    cleaned.push(cleanedBlock);
+  }
+
+  return { cleaned, skipped, warnings };
 }
 
-// ============ Core Functions ============
+// ============ Markdown Conversion ============
 
-async function convertMarkdown(client: Lark.Client, markdown: string) {
+/**
+ * Convert markdown using Feishu API
+ * This is the original method using the document.convert API
+ */
+async function convertMarkdownViaApi(
+  client: Lark.Client,
+  markdown: string,
+): Promise<{ blocks: any[]; firstLevelBlockIds: string[]; warnings?: string[] }> {
   const res = await client.docx.document.convert({
     data: { content_type: "markdown", content: markdown },
   });
-  if (res.code !== 0) throw new Error(res.msg);
+
+  if (res.code !== 0) {
+    throw new Error(`API convert failed: ${res.msg}`);
+  }
+
+  const warnings: string[] = [];
+  const blocks = res.data?.blocks ?? [];
+
+  // Post-process blocks to fix issues
+  const processedBlocks = blocks.map((block: any) => {
+    // Fix code block language
+    if (block.block_type === 14 && block.code) {
+      // Ensure code block has proper structure
+      if (!block.code.elements || block.code.elements.length === 0) {
+        block.code.elements = [{ text_run: { content: "" } }];
+      }
+    }
+    return block;
+  });
+
   return {
-    blocks: res.data?.blocks ?? [],
+    blocks: processedBlocks,
     firstLevelBlockIds: res.data?.first_level_block_ids ?? [],
+    warnings: warnings.length > 0 ? warnings : undefined,
   };
 }
+
+/**
+ * Convert markdown using local parser
+ * This provides better control over the output format
+ */
+function convertMarkdownLocal(markdown: string): { blocks: DocBlock[]; warnings?: string[] } {
+  const preprocessed = preprocessMarkdown(markdown);
+  const blocks = convertMarkdownToBlocks(preprocessed);
+  
+  return { blocks };
+}
+
+/**
+ * Hybrid converter: tries API first, falls back to local if needed
+ */
+async function convertMarkdown(
+  client: Lark.Client,
+  markdown: string,
+  options?: { preferLocal?: boolean; fallbackToLocal?: boolean },
+): Promise<{ blocks: any[]; firstLevelBlockIds?: string[]; warnings?: string[]; method: "api" | "local" }> {
+  const warnings: string[] = [];
+
+  // Use local converter if preferred
+  if (options?.preferLocal) {
+    const localResult = convertMarkdownLocal(markdown);
+    return {
+      blocks: localResult.blocks,
+      warnings: localResult.warnings,
+      method: "local",
+    };
+  }
+
+  // Try API first
+  try {
+    const apiResult = await convertMarkdownViaApi(client, markdown);
+    return {
+      blocks: apiResult.blocks,
+      firstLevelBlockIds: apiResult.firstLevelBlockIds,
+      warnings: apiResult.warnings,
+      method: "api",
+    };
+  } catch (error) {
+    if (options?.fallbackToLocal !== false) {
+      warnings.push(`API conversion failed: ${error instanceof Error ? error.message : String(error)}. Falling back to local converter.`);
+      const localResult = convertMarkdownLocal(markdown);
+      return {
+        blocks: localResult.blocks,
+        warnings: [...warnings, ...(localResult.warnings || [])],
+        method: "local",
+      };
+    }
+    throw error;
+  }
+}
+
+// ============ Block Operations ============
 
 async function insertBlocks(
   client: Lark.Client,
   docToken: string,
   blocks: any[],
   parentBlockId?: string,
-): Promise<{ children: any[]; skipped: string[] }> {
-  const { cleaned, skipped } = cleanBlocksForInsert(blocks);
+): Promise<{ children: any[]; skipped: string[]; warnings: string[] }> {
+  const { cleaned, skipped, warnings: cleanWarnings } = cleanBlocksForInsert(blocks);
   const blockId = parentBlockId ?? docToken;
 
   if (cleaned.length === 0) {
-    return { children: [], skipped };
+    return { children: [], skipped, warnings: cleanWarnings };
   }
 
   const res = await client.docx.documentBlockChildren.create({
     path: { document_id: docToken, block_id: blockId },
     data: { children: cleaned },
   });
-  if (res.code !== 0) throw new Error(res.msg);
-  return { children: res.data?.children ?? [], skipped };
+
+  if (res.code !== 0) {
+    throw new Error(`Failed to insert blocks: ${res.msg}`);
+  }
+
+  return {
+    children: res.data?.children ?? [],
+    skipped,
+    warnings: cleanWarnings,
+  };
 }
 
 async function clearDocumentContent(client: Lark.Client, docToken: string) {
@@ -163,6 +227,8 @@ async function clearDocumentContent(client: Lark.Client, docToken: string) {
 
   return childIds.length;
 }
+
+// ============ Image Handling ============
 
 async function uploadImageToDocx(
   client: Lark.Client,
@@ -204,7 +270,7 @@ async function processImages(
   const imageUrls = extractImageUrls(markdown);
   if (imageUrls.length === 0) return 0;
 
-  const imageBlocks = insertedBlocks.filter((b) => b.block_type === 27);
+  const imageBlocks = insertedBlocks.filter((b) => b.block_type === 23 || b.block_type === 27);
 
   let processed = 0;
   for (let i = 0; i < Math.min(imageUrls.length, imageBlocks.length); i++) {
@@ -235,7 +301,7 @@ async function processImages(
 
 // ============ Actions ============
 
-const STRUCTURED_BLOCK_TYPES = new Set([14, 18, 21, 23, 27, 30, 31, 32]);
+const STRUCTURED_BLOCK_TYPES = new Set([14, 17, 18, 19, 20, 21, 23, 27, 30, 31]);
 
 async function readDoc(client: Lark.Client, docToken: string) {
   const [contentRes, infoRes, blocksRes] = await Promise.all([
@@ -288,54 +354,96 @@ async function createDoc(client: Lark.Client, title: string, folderToken?: strin
   };
 }
 
-async function writeDoc(client: Lark.Client, docToken: string, markdown: string) {
+async function writeDoc(
+  client: Lark.Client,
+  docToken: string,
+  markdown: string,
+  options?: { preferLocalConverter?: boolean },
+) {
   const deleted = await clearDocumentContent(client, docToken);
 
-  const { blocks, firstLevelBlockIds } = await convertMarkdown(client, markdown);
+  const { blocks, warnings, method } = await convertMarkdown(client, markdown, {
+    preferLocal: options?.preferLocalConverter,
+    fallbackToLocal: true,
+  });
+
   if (blocks.length === 0) {
-    return { success: true, blocks_deleted: deleted, blocks_added: 0, images_processed: 0 };
+    return {
+      success: true,
+      blocks_deleted: deleted,
+      blocks_added: 0,
+      images_processed: 0,
+      conversion_method: method,
+    };
   }
 
-  // Reorder blocks according to firstLevelBlockIds to maintain correct document order.
-  // The convertMarkdown API returns blocks in an unordered map; firstLevelBlockIds
-  // provides the correct top-level ordering.
-  const orderedBlocks = reorderBlocks(blocks, firstLevelBlockIds);
-
-  const { children: inserted, skipped } = await insertBlocks(client, docToken, orderedBlocks);
+  const { children: inserted, skipped, warnings: insertWarnings } = await insertBlocks(
+    client,
+    docToken,
+    blocks,
+  );
+  
   const imagesProcessed = await processImages(client, docToken, markdown, inserted);
 
-  return {
+  const allWarnings = [...(warnings || []), ...insertWarnings];
+  const result: Record<string, any> = {
     success: true,
     blocks_deleted: deleted,
     blocks_added: inserted.length,
     images_processed: imagesProcessed,
-    ...(skipped.length > 0 && {
-      warning: `Skipped unsupported block types: ${skipped.join(", ")}. Tables are not supported via this API.`,
-    }),
+    conversion_method: method,
   };
+
+  if (skipped.length > 0) {
+    result.warning = `Skipped unsupported block types: ${skipped.join(", ")}. Tables are not supported via this API.`;
+  }
+  if (allWarnings.length > 0) {
+    result.warnings = allWarnings;
+  }
+
+  return result;
 }
 
-async function appendDoc(client: Lark.Client, docToken: string, markdown: string) {
-  const { blocks, firstLevelBlockIds } = await convertMarkdown(client, markdown);
+async function appendDoc(
+  client: Lark.Client,
+  docToken: string,
+  markdown: string,
+  options?: { preferLocalConverter?: boolean },
+) {
+  const { blocks, warnings, method } = await convertMarkdown(client, markdown, {
+    preferLocal: options?.preferLocalConverter,
+    fallbackToLocal: true,
+  });
+
   if (blocks.length === 0) {
     throw new Error("Content is empty");
   }
 
-  // Reorder blocks according to firstLevelBlockIds (same fix as writeDoc)
-  const orderedBlocks = reorderBlocks(blocks, firstLevelBlockIds);
-
-  const { children: inserted, skipped } = await insertBlocks(client, docToken, orderedBlocks);
+  const { children: inserted, skipped, warnings: insertWarnings } = await insertBlocks(
+    client,
+    docToken,
+    blocks,
+  );
+  
   const imagesProcessed = await processImages(client, docToken, markdown, inserted);
 
-  return {
+  const allWarnings = [...(warnings || []), ...insertWarnings];
+  const result: Record<string, any> = {
     success: true,
     blocks_added: inserted.length,
     images_processed: imagesProcessed,
     block_ids: inserted.map((b: any) => b.block_id),
-    ...(skipped.length > 0 && {
-      warning: `Skipped unsupported block types: ${skipped.join(", ")}. Tables are not supported via this API.`,
-    }),
+    conversion_method: method,
   };
+
+  if (skipped.length > 0) {
+    result.warning = `Skipped unsupported block types: ${skipped.join(", ")}. Tables are not supported via this API.`;
+  }
+  if (allWarnings.length > 0) {
+    result.warnings = allWarnings;
+  }
+
+  return result;
 }
 
 async function updateBlock(
@@ -425,6 +533,20 @@ async function listAppScopes(client: Lark.Client) {
   };
 }
 
+async function deleteDocument(client: Lark.Client, docToken: string) {
+  const res = await client.drive.file.delete({
+    path: { file_token: docToken },
+    params: { type: "docx" },
+  });
+  if (res.code !== 0) throw new Error(res.msg);
+
+  return {
+    success: true,
+    document_id: docToken,
+    task_id: res.data?.task_id,
+  };
+}
+
 // ============ Tool Registration ============
 
 export function registerFeishuDocTools(api: OpenClawPluginApi) {
@@ -433,84 +555,81 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
     return;
   }
 
-  // Check if any account is configured
   const accounts = listEnabledFeishuAccounts(api.config);
   if (accounts.length === 0) {
     api.logger.debug?.("feishu_doc: No Feishu accounts configured, skipping doc tools");
     return;
   }
 
-  // Use first account's config for tools configuration
   const firstAccount = accounts[0];
   const toolsCfg = resolveToolsConfig(firstAccount.config.tools);
-  
-  // Helper to get client for the default account
+
   const getClient = () => createFeishuClient(firstAccount);
   const registered: string[] = [];
 
-  // Main document tool with action-based dispatch
   if (toolsCfg.doc) {
     api.registerTool(
-    {
-      name: "feishu_doc",
-      label: "Feishu Doc",
-      description:
-        "Feishu document operations. Actions: read, write, append, create, list_blocks, get_block, update_block, delete_block",
-      parameters: FeishuDocSchema,
-      async execute(_toolCallId, params) {
-        const p = params as FeishuDocParams;
-        try {
-          const client = getClient();
-          switch (p.action) {
-            case "read":
-              return json(await readDoc(client, p.doc_token));
-            case "write":
-              return json(await writeDoc(client, p.doc_token, p.content));
-            case "append":
-              return json(await appendDoc(client, p.doc_token, p.content));
-            case "create":
-              return json(await createDoc(client, p.title, p.folder_token));
-            case "list_blocks":
-              return json(await listBlocks(client, p.doc_token));
-            case "get_block":
-              return json(await getBlock(client, p.doc_token, p.block_id));
-            case "update_block":
-              return json(await updateBlock(client, p.doc_token, p.block_id, p.content));
-            case "delete_block":
-              return json(await deleteBlock(client, p.doc_token, p.block_id));
-            default:
-              return json({ error: `Unknown action: ${(p as any).action}` });
+      {
+        name: "feishu_doc",
+        label: "Feishu Doc",
+        description:
+          "Feishu document operations. Actions: read, write, append, create, delete, list_blocks, get_block, update_block, delete_block. Enhanced markdown conversion with proper formatting for headings, lists, code blocks, tables (ASCII), quotes, dividers, and links.",
+        parameters: FeishuDocSchema,
+        async execute(_toolCallId, params) {
+          const p = params as FeishuDocParams;
+          try {
+            const client = getClient();
+            switch (p.action) {
+              case "read":
+                return json(await readDoc(client, p.doc_token));
+              case "write":
+                return json(await writeDoc(client, p.doc_token, p.content));
+              case "append":
+                return json(await appendDoc(client, p.doc_token, p.content));
+              case "create":
+                return json(await createDoc(client, p.title, p.folder_token));
+              case "list_blocks":
+                return json(await listBlocks(client, p.doc_token));
+              case "get_block":
+                return json(await getBlock(client, p.doc_token, p.block_id));
+              case "update_block":
+                return json(await updateBlock(client, p.doc_token, p.block_id, p.content));
+              case "delete_block":
+                return json(await deleteBlock(client, p.doc_token, p.block_id));
+              case "delete":
+                return json(await deleteDocument(client, p.doc_token));
+              default:
+                return json({ error: `Unknown action: ${(p as any).action}` });
+            }
+          } catch (err) {
+            return json({ error: err instanceof Error ? err.message : String(err) });
           }
-        } catch (err) {
-          return json({ error: err instanceof Error ? err.message : String(err) });
-        }
+        },
       },
-    },
-    { name: "feishu_doc" },
-  );
+      { name: "feishu_doc" },
+    );
     registered.push("feishu_doc");
   }
 
-  // Keep feishu_app_scopes as independent tool
   if (toolsCfg.scopes) {
     api.registerTool(
-    {
-      name: "feishu_app_scopes",
-      label: "Feishu App Scopes",
-      description:
-        "List current app permissions (scopes). Use to debug permission issues or check available capabilities.",
-      parameters: Type.Object({}),
-      async execute() {
-        try {
-          const result = await listAppScopes(getClient());
-          return json(result);
-        } catch (err) {
-          return json({ error: err instanceof Error ? err.message : String(err) });
-        }
+      {
+        name: "feishu_app_scopes",
+        label: "Feishu App Scopes",
+        description:
+          "List current app permissions (scopes). Use to debug permission issues or check available capabilities.",
+        parameters: Type.Object({}),
+        async execute() {
+          try {
+            const result = await listAppScopes(getClient());
+            return json(result);
+          } catch (err) {
+            return json({ error: err instanceof Error ? err.message : String(err) });
+          }
+        },
       },
-    },
-    { name: "feishu_app_scopes" },
-  );
+      { name: "feishu_app_scopes" },
+    );
     registered.push("feishu_app_scopes");
   }
 

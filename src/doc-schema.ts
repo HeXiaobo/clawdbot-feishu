@@ -42,6 +42,10 @@ export const FeishuDocSchema = Type.Union([
     doc_token: Type.String({ description: "Document token" }),
     block_id: Type.String({ description: "Block ID" }),
   }),
+  Type.Object({
+    action: Type.Literal("delete"),
+    doc_token: Type.String({ description: "Document token to delete" }),
+  }),
 ]);
 
 export type FeishuDocParams = Static<typeof FeishuDocSchema>;
