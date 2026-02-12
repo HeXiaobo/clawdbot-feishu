@@ -68,6 +68,7 @@ export type FeishuToolsConfig = {
   perm?: boolean;
   scopes?: boolean;
   sheet?: boolean;
+  task?: boolean;
 };
 
 export type DynamicAgentCreationConfig = {

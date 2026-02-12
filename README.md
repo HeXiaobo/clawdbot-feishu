@@ -3,6 +3,8 @@
 Feishu/Lark (飞书) channel plugin for [OpenClaw](https://github.com/openclaw/openclaw).
 
 > **中文社区资料** - 配置教程、常见问题、使用技巧：[Wiki](https://github.com/m1heng/clawdbot-feishu/wiki)
+>
+> **Contributing / 贡献指南**: [CONTRIBUTING.md](./CONTRIBUTING.md)
 
 [English](#english) | [中文](#中文)
 
@@ -61,6 +63,7 @@ openclaw plugins update feishu
 | `drive:drive:readonly` | `feishu_drive` | List folders, get file info |
 | `wiki:wiki:readonly` | `feishu_wiki` | List spaces, list nodes, get node info, search |
 | `bitable:app:readonly` | `feishu_bitable` | Read bitable records and fields |
+| `task:task:read` | `feishu_task_get` | Get task details |
 
 **Read-write** (optional, for create/edit/delete operations):
 
@@ -70,7 +73,10 @@ openclaw plugins update feishu
 | `docx:document.block:convert` | `feishu_doc` | Markdown to blocks conversion (required for write/append) |
 | `drive:drive` | `feishu_doc`, `feishu_drive` | Upload images to documents, create folders, move/delete files |
 | `wiki:wiki` | `feishu_wiki` | Create/move/rename wiki nodes |
-| `bitable:app` | `feishu_bitable` | Create/update bitable records |
+| `bitable:app` | `feishu_bitable` | Create/update/delete bitable records and manage fields |
+| `task:task:write` | `feishu_task_create`, `feishu_task_update`, `feishu_task_delete` | Create/update/delete tasks |
+
+> Task scope names may vary slightly in Feishu console UI. If needed, search for Task-related permissions and grant read/write accordingly.
 
 #### Drive Access ⚠️
 
@@ -260,7 +266,8 @@ session:
 - **Document tools**: Read, create, and write Feishu documents with markdown (tables not supported due to API limitations)
 - **Wiki tools**: Navigate knowledge bases, list spaces, get node details, search, create/move/rename nodes
 - **Drive tools**: List folders, get file info, create folders, move/delete files
-- **Bitable tools**: Read/write bitable (多维表格) records, supports both `/base/` and `/wiki/` URLs
+- **Bitable tools**: Manage bitable (多维表格) fields and records (read/create/update/delete), supports both `/base/` and `/wiki/` URLs
+- **Task tools**: Create, get details, update, and delete tasks via Feishu Task v2 API
 - **@mention forwarding**: When you @mention someone in your message, the bot's reply will automatically @mention them too
 - **Permission error notification**: When the bot encounters a Feishu API permission error, it automatically notifies the user with the permission grant URL
 - **Dynamic agent creation**: Each DM user can have their own isolated agent instance with dedicated workspace (optional)
@@ -372,6 +379,7 @@ openclaw plugins update feishu
 | `drive:drive:readonly` | `feishu_drive` | 列出文件夹、获取文件信息 |
 | `wiki:wiki:readonly` | `feishu_wiki` | 列出空间、列出节点、获取节点详情、搜索 |
 | `bitable:app:readonly` | `feishu_bitable` | 读取多维表格记录和字段 |
+| `task:task:read` | `feishu_task_get` | 获取任务详情 |
 
 **读写权限**（可选，用于创建/编辑/删除操作）：
 
@@ -381,7 +389,10 @@ openclaw plugins update feishu
 | `docx:document.block:convert` | `feishu_doc` | Markdown 转 blocks（write/append 必需） |
 | `drive:drive` | `feishu_doc`, `feishu_drive` | 上传图片到文档、创建文件夹、移动/删除文件 |
 | `wiki:wiki` | `feishu_wiki` | 创建/移动/重命名知识库节点 |
-| `bitable:app` | `feishu_bitable` | 创建/更新多维表格记录 |
+| `bitable:app` | `feishu_bitable` | 创建/更新/删除多维表格记录并管理字段 |
+| `task:task:write` | `feishu_task_create`, `feishu_task_update`, `feishu_task_delete` | 创建/更新/删除任务 |
+
+> 飞书控制台中任务权限的显示名称可能略有差异，必要时可按关键字 `task` 搜索并授予对应读写权限。
 
 #### 云空间访问权限 ⚠️
 
@@ -571,7 +582,8 @@ session:
 - **文档工具**：读取、创建、用 Markdown 写入飞书文档（表格因 API 限制不支持）
 - **知识库工具**：浏览知识库、列出空间、获取节点详情、搜索、创建/移动/重命名节点
 - **云空间工具**：列出文件夹、获取文件信息、创建文件夹、移动/删除文件
-- **多维表格工具**：读写多维表格记录，支持 `/base/` 和 `/wiki/` 两种链接格式
+- **多维表格工具**：支持多维表格字段与记录的读取/创建/更新/删除，支持 `/base/` 和 `/wiki/` 两种链接格式
+- **任务工具**：基于 Task v2 API 支持任务创建、获取详情、更新和删除
 - **@ 转发功能**：在消息中 @ 某人，机器人的回复会自动 @ 该用户
 - **权限错误提示**：当机器人遇到飞书 API 权限错误时，会自动通知用户并提供权限授权链接
 - **动态 Agent 创建**：每个私聊用户可拥有独立的 agent 实例和专属 workspace（可选）

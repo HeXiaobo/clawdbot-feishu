@@ -8,6 +8,7 @@ import { registerFeishuDriveTools } from "./src/drive.js";
 import { registerFeishuPermTools } from "./src/perm.js";
 import { registerFeishuBitableTools } from "./src/bitable.js";
 import { registerFeishuSheetTools } from "./src/sheet.js";
+import { registerFeishuTaskTools } from "./src/task.js";
 
 export { monitorFeishuProvider } from "./src/monitor.js";
 export {
@@ -24,7 +25,7 @@ export {
   sendFileFeishu,
   sendMediaFeishu,
 } from "./src/media.js";
-export { probeFeishu } from "./src/probe.js";
+export { probeFeishu, clearProbeCache } from "./src/probe.js";
 export {
   addReactionFeishu,
   removeReactionFeishu,
@@ -59,6 +60,7 @@ const plugin = {
     registerFeishuPermTools(api);
     registerFeishuBitableTools(api);
     registerFeishuSheetTools(api);
+    registerFeishuTaskTools(api);
   },
 };
 
