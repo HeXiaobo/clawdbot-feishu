@@ -18,6 +18,19 @@ Feishu/Lark (飞书) channel plugin for [OpenClaw](https://github.com/openclaw/o
 openclaw plugins install @m1heng-clawd/feishu
 ```
 
+> [!IMPORTANT]
+> **Windows Troubleshooting (`spawn npm ENOENT`)**
+>
+> If `openclaw plugins install` fails, install manually:
+>
+> ```bash
+> # 1. Download the package
+> curl -O https://registry.npmjs.org/@m1heng-clawd/feishu/-/feishu-0.1.3.tgz
+>
+> # 2. Install from local file
+> openclaw plugins install ./feishu-0.1.3.tgz
+> ```
+
 ### Upgrade
 
 ```bash
@@ -70,7 +83,7 @@ openclaw plugins update feishu
 | Permission | Tool | Description |
 |------------|------|-------------|
 | `docx:document` | `feishu_doc` | Create/edit documents |
-| `docx:document.block:convert` | `feishu_doc` | Markdown to blocks conversion (required for write/append) |
+| `docx:document.block:convert` | `feishu_doc` | Markdown to blocks conversion (required for write/append/create_and_write; also used by `feishu_drive.import_document`) |
 | `drive:drive` | `feishu_doc`, `feishu_drive` | Upload images to documents, create folders, move/delete files |
 | `wiki:wiki` | `feishu_wiki` | Create/move/rename wiki nodes |
 | `bitable:app` | `feishu_bitable` | Create/update/delete bitable records and manage fields |
@@ -155,6 +168,8 @@ channels:
     connectionMode: "websocket"
     # DM policy: "pairing" | "open" | "allowlist"
     dmPolicy: "pairing"
+    # DM allowlist (open_id/user_id). Include "*" when dmPolicy="open"
+    allowFrom: []
     # Group policy: "open" | "allowlist" | "disabled"
     groupPolicy: "allowlist"
     # Require @mention in groups
@@ -164,6 +179,81 @@ channels:
     # Render mode for bot replies: "auto" | "raw" | "card"
     renderMode: "auto"
 ```
+
+#### DM Policy & Access Control
+
+`dmPolicy` controls who can interact with the bot in direct messages (DM).  
+In multi-account mode, this is resolved per account (`channels.feishu.accounts.<accountId>`).
+
+| `dmPolicy` | Who can send DM | How to grant access to a user |
+|------------|------------------|--------------------------------|
+| `pairing` | Users in `allowFrom`, or users approved through pairing | User sends a DM and gets a pairing code; bot owner runs `openclaw pairing approve feishu <code>`. |
+| `open` | Everyone | Set `allowFrom: ["*"]` so all users are treated as allowed. |
+| `allowlist` | Only users in `allowFrom` | Add the user's `open_id`/`user_id` to `allowFrom`, then reload config. |
+
+Notes:
+- `allowFrom` accepts Feishu user IDs (`open_id` recommended, `user_id` also supported).
+- If `dmPolicy: "open"`, use `allowFrom: ["*"]`. This is required by top-level schema validation and keeps access behavior explicit.
+- `pairing` and `allowlist` can both pre-authorize users with `allowFrom`.
+
+Pairing flow (owner approval):
+1. User sends any DM to the bot.
+2. Bot replies with a pairing code (for example `H9ZEHY8R`).
+3. Bot owner approves:
+
+```bash
+openclaw pairing approve feishu H9ZEHY8R
+```
+
+4. The user is added to the allow store and can chat immediately.
+
+Example: open to everyone
+
+```yaml
+channels:
+  feishu:
+    dmPolicy: "open"
+    allowFrom: ["*"]
+```
+
+Example: controlled rollout (pairing + pre-approved users)
+
+```yaml
+channels:
+  feishu:
+    dmPolicy: "pairing"
+    allowFrom:
+      - "ou_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+```
+
+Example: strict allowlist
+
+```yaml
+channels:
+  feishu:
+    dmPolicy: "allowlist"
+    allowFrom:
+      - "ou_alice"
+      - "ou_bob"
+```
+
+Example: account-level isolation
+
+```yaml
+channels:
+  feishu:
+    accounts:
+      lobster-1:
+        dmPolicy: "open"
+        allowFrom: ["*"]
+      lobster-5:
+        dmPolicy: "pairing"
+```
+
+Top-level `channels.feishu.dmPolicy` / `channels.feishu.allowFrom` are fallback defaults for accounts that do not override them.
+
+> `dmPolicy` only controls who can trigger the bot.  
+> To actually read/write docs or files, you still need: (1) correct Feishu app scopes, and (2) sharing the target resources (Drive/Wiki/Bitable) with the bot.
 
 #### Connection Mode
 
@@ -263,7 +353,7 @@ session:
 - Pairing flow for DM approval
 - User and group directory lookup
 - **Card render mode**: Optional markdown rendering with syntax highlighting
-- **Document tools**: Read, create, and write Feishu documents with markdown (tables not supported due to API limitations)
+- **Document tools**: Read, create, and write Feishu documents with markdown, including atomic `create_and_write` / `import_document` flows for reliable create+content write
 - **Wiki tools**: Navigate knowledge bases, list spaces, get node details, search, create/move/rename nodes
 - **Drive tools**: List folders, get file info, create folders, move/delete files
 - **Bitable tools**: Manage bitable (多维表格) fields and records (read/create/update/delete), supports both `/base/` and `/wiki/` URLs
@@ -306,18 +396,6 @@ Send `/new` command in the chat.
 
 Feishu API has rate limits. Streaming updates can easily trigger throttling. We use complete-then-send approach for stability.
 
-#### Windows install error `spawn npm ENOENT`
-
-If `openclaw plugins install` fails, install manually:
-
-```bash
-# 1. Download the package
-curl -O https://registry.npmjs.org/@m1heng-clawd/feishu/-/feishu-0.1.3.tgz
-
-# 2. Install from local file
-openclaw plugins install ./feishu-0.1.3.tgz
-```
-
 #### Cannot find the bot in Feishu
 
 1. Ensure the app is published (at least to test version)
@@ -333,6 +411,19 @@ openclaw plugins install ./feishu-0.1.3.tgz
 ```bash
 openclaw plugins install @m1heng-clawd/feishu
 ```
+
+> [!IMPORTANT]
+> **Windows 排错（`spawn npm ENOENT`）**
+>
+> 如果 `openclaw plugins install` 失败，可以手动安装：
+>
+> ```bash
+> # 1. 下载插件包
+> curl -O https://registry.npmjs.org/@m1heng-clawd/feishu/-/feishu-0.1.3.tgz
+>
+> # 2. 从本地安装
+> openclaw plugins install ./feishu-0.1.3.tgz
+> ```
 
 ### 升级
 
@@ -386,7 +477,7 @@ openclaw plugins update feishu
 | 权限 | 工具 | 说明 |
 |------|------|------|
 | `docx:document` | `feishu_doc` | 创建/编辑文档 |
-| `docx:document.block:convert` | `feishu_doc` | Markdown 转 blocks（write/append 必需） |
+| `docx:document.block:convert` | `feishu_doc` | Markdown 转 blocks（write/append/create_and_write 必需，`feishu_drive.import_document` 也会用到） |
 | `drive:drive` | `feishu_doc`, `feishu_drive` | 上传图片到文档、创建文件夹、移动/删除文件 |
 | `wiki:wiki` | `feishu_wiki` | 创建/移动/重命名知识库节点 |
 | `bitable:app` | `feishu_bitable` | 创建/更新/删除多维表格记录并管理字段 |
@@ -471,6 +562,8 @@ channels:
     connectionMode: "websocket"
     # 私聊策略: "pairing" | "open" | "allowlist"
     dmPolicy: "pairing"
+    # 私聊白名单（open_id/user_id）；当 dmPolicy="open" 时请包含 "*"
+    allowFrom: []
     # 群聊策略: "open" | "allowlist" | "disabled"
     groupPolicy: "allowlist"
     # 群聊是否需要 @机器人
@@ -480,6 +573,81 @@ channels:
     # 回复渲染模式: "auto" | "raw" | "card"
     renderMode: "auto"
 ```
+
+#### 私聊策略（dmPolicy）与访问授权
+
+`dmPolicy` 控制的是“谁可以在私聊里触发机器人”。  
+在多账号模式下，它按账号生效（`channels.feishu.accounts.<accountId>`）。
+
+| `dmPolicy` | 谁能私聊触发机器人 | 如何给用户开通 |
+|------------|------------------|----------------|
+| `pairing` | `allowFrom` 中的用户，或已通过配对审批的用户 | 用户先私聊机器人拿到配对码；管理员执行 `openclaw pairing approve feishu <code>`。 |
+| `open` | 所有人 | 配置 `allowFrom: ["*"]`，表示全部放开。 |
+| `allowlist` | 仅 `allowFrom` 中的用户 | 将用户 `open_id`/`user_id` 加入 `allowFrom`，然后重载配置。 |
+
+说明：
+- `allowFrom` 支持飞书用户 ID（推荐 `open_id`，也支持 `user_id`）。
+- 当 `dmPolicy: "open"` 时，建议固定写 `allowFrom: ["*"]`，语义最清晰，也满足顶层配置校验要求。
+- `pairing` 和 `allowlist` 都可以先通过 `allowFrom` 预授权部分用户。
+
+配对审批流程（pairing）：
+1. 用户先给机器人发一条私聊消息。
+2. 机器人返回配对码（例如 `H9ZEHY8R`）。
+3. 管理员执行审批命令：
+
+```bash
+openclaw pairing approve feishu H9ZEHY8R
+```
+
+4. 审批后该用户立即可用。
+
+示例：全部放开
+
+```yaml
+channels:
+  feishu:
+    dmPolicy: "open"
+    allowFrom: ["*"]
+```
+
+示例：灰度放开（pairing + 预授权）
+
+```yaml
+channels:
+  feishu:
+    dmPolicy: "pairing"
+    allowFrom:
+      - "ou_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+```
+
+示例：严格白名单
+
+```yaml
+channels:
+  feishu:
+    dmPolicy: "allowlist"
+    allowFrom:
+      - "ou_alice"
+      - "ou_bob"
+```
+
+示例：按账号隔离配置
+
+```yaml
+channels:
+  feishu:
+    accounts:
+      lobster-1:
+        dmPolicy: "open"
+        allowFrom: ["*"]
+      lobster-5:
+        dmPolicy: "pairing"
+```
+
+`channels.feishu.dmPolicy` / `channels.feishu.allowFrom` 是“默认值”；账号下未覆盖时才会继承。
+
+> `dmPolicy` 只控制“是否允许触发机器人”。  
+> 真正执行文档/云盘/知识库/多维表格操作，还需要两层权限：1）应用 API 权限（scopes）；2）把目标资源分享给机器人。
 
 #### 连接模式
 
@@ -621,18 +789,6 @@ session:
 #### 消息为什么不是流式输出
 
 飞书 API 有请求频率限制，流式更新消息很容易触发限流。当前采用完整回复后一次性发送的方式，以保证稳定性。
-
-#### Windows 安装报错 `spawn npm ENOENT`
-
-如果 `openclaw plugins install` 失败，可以手动安装：
-
-```bash
-# 1. 下载插件包
-curl -O https://registry.npmjs.org/@m1heng-clawd/feishu/-/feishu-0.1.3.tgz
-
-# 2. 从本地安装
-openclaw plugins install ./feishu-0.1.3.tgz
-```
 
 #### 在飞书里找不到机器人
 
