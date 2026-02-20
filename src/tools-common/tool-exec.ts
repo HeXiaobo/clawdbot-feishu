@@ -39,6 +39,49 @@ export function resolveToolAccount(cfg: ClawdbotConfig): ResolvedFeishuAccount {
 }
 
 /**
+ * HTTP client for user token requests
+ */
+export interface UserTokenHttpClient {
+  get: (url: string) => Promise<any>;
+  post: (url: string, body?: any) => Promise<any>;
+}
+
+/**
+ * Create HTTP client with user token
+ */
+function createUserTokenClient(userToken: string, domain: string): UserTokenHttpClient {
+  const baseUrl = domain.startsWith("http") ? domain : `https://${domain}`;
+  
+  async function request(method: string, url: string, body?: any): Promise<any> {
+    const fullUrl = url.startsWith("http") ? url : `${baseUrl}${url}`;
+    const headers: Record<string, string> = {
+      "Authorization": `Bearer ${userToken}`,
+      "Content-Type": "application/json",
+    };
+    
+    const fetchOptions: RequestInit = { method, headers };
+    
+    if (body) {
+      fetchOptions.body = typeof body === "string" ? body : JSON.stringify(body);
+    }
+    
+    const response = await fetch(fullUrl, fetchOptions);
+    const data = await response.json();
+    
+    if (!response.ok || data.code !== 0) {
+      throw new Error(data.msg || `HTTP ${response.status}`);
+    }
+    
+    return data;
+  }
+  
+  return {
+    get: (url: string) => request("GET", url),
+    post: (url: string, body?: any) => request("POST", url, body),
+  };
+}
+
+/**
  * Execute tool with user token (for external docs) with fallback to tenant token
  */
 export async function withFeishuToolClient<T>(params: {
@@ -46,7 +89,11 @@ export async function withFeishuToolClient<T>(params: {
   toolName: string;
   requiredTool?: FeishuToolFlag;
   useUserToken?: boolean; // Enable user token for external doc reading
-  run: (args: { client: Lark.Client; account: ResolvedFeishuAccount }) => Promise<T>;
+  run: (args: { 
+    client: Lark.Client; 
+    account: ResolvedFeishuAccount;
+    userTokenClient?: UserTokenHttpClient;
+  }) => Promise<T>;
 }): Promise<T> {
   if (!params.api.config) {
     throw new Error("Feishu config is not available");
@@ -73,51 +120,26 @@ export async function withFeishuToolClient<T>(params: {
   }
 
   // Check if user token should be used (for external doc reading)
+  let userTokenClient: UserTokenHttpClient | undefined;
+  
   if (params.useUserToken && hasUserAuth(account.accountId)) {
     try {
       const userToken = await getUserAccessToken(account.accountId);
       if (userToken) {
-        // Create a client with user token
         const domain = account.domain === "lark" ? "https://open.larksuite.com" : "https://open.feishu.cn";
-        const userClient = {
-          ...createFeishuClient(account),
-          // Override the request method to use user token
-          request: async (options: any) => {
-            const url = typeof options === "string" ? options : options.url;
-            const method = typeof options === "string" ? "GET" : (options.method || "GET");
-            const headers = {
-              "Authorization": `Bearer ${userToken}`,
-              "Content-Type": "application/json",
-              ...(typeof options !== "string" ? options.headers : {}),
-            };
-            
-            const fetchOptions: RequestInit = {
-              method,
-              headers,
-            };
-            
-            if (typeof options === "object" && options.body) {
-              fetchOptions.body = typeof options.body === "string" 
-                ? options.body 
-                : JSON.stringify(options.body);
-            }
-            
-            const response = await fetch(url.startsWith("http") ? url : `${domain}${url}`, fetchOptions);
-            
-            if (!response.ok) {
-              const errorText = await response.text();
-              throw new Error(`HTTP ${response.status}: ${errorText}`);
-            }
-            
-            return response.json();
-          },
-        } as unknown as Lark.Client;
+        userTokenClient = createUserTokenClient(userToken, domain);
         
+        // Try with user token first
         try {
-          return await params.run({ client: userClient, account });
+          return await params.run({ 
+            client: createFeishuClient(account), 
+            account, 
+            userTokenClient 
+          });
         } catch (userTokenErr) {
           // User token failed, log and fallback to tenant token
           params.api.logger.debug?.(`User token failed for ${params.toolName}, falling back to tenant token: ${userTokenErr}`);
+          userTokenClient = undefined;
         }
       }
     } catch (err) {
@@ -127,5 +149,5 @@ export async function withFeishuToolClient<T>(params: {
 
   // Fall back to tenant token (default behavior)
   const client = createFeishuClient(account);
-  return params.run({ client, account });
+  return params.run({ client, account, userTokenClient: undefined });
 }

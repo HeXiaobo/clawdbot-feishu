@@ -2,7 +2,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { FeishuSheetSchema, type FeishuSheetParams } from "./sheet-schema.js";
 import { resolveToolsConfig } from "./tools-config.js";
-import { withFeishuToolClient } from "./tools-common/tool-exec.js";
+import { withFeishuToolClient, type UserTokenHttpClient } from "./tools-common/tool-exec.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 
 // ============ Helpers ============
@@ -77,12 +77,20 @@ function getHttpClient(client: Lark.Client) {
 // ============ Actions ============
 
 /** Get all sheets in a spreadsheet */
-async function listSheets(client: Lark.Client, spreadsheetToken: string) {
-  const { domain, http } = getHttpClient(client);
-
-  const res = await http.get(
-    `${domain}/open-apis/sheets/v3/spreadsheets/${spreadsheetToken}/sheets/query`
-  );
+async function listSheets(
+  client: Lark.Client, 
+  spreadsheetToken: string,
+  userTokenClient?: UserTokenHttpClient
+) {
+  const url = `/open-apis/sheets/v3/spreadsheets/${spreadsheetToken}/sheets/query`;
+  
+  let res: any;
+  if (userTokenClient) {
+    res = await userTokenClient.get(url);
+  } else {
+    const { domain, http } = getHttpClient(client);
+    res = await http.get(`${domain}${url}`);
+  }
 
   if (res.code !== 0) {
     throw new Error(`Failed to list sheets: ${res.msg}`);
@@ -103,13 +111,22 @@ async function listSheets(client: Lark.Client, spreadsheetToken: string) {
 }
 
 /** Read data from a specific range */
-async function readRange(client: Lark.Client, spreadsheetToken: string, range: string) {
-  const { domain, http } = getHttpClient(client);
-
+async function readRange(
+  client: Lark.Client, 
+  spreadsheetToken: string, 
+  range: string,
+  userTokenClient?: UserTokenHttpClient
+) {
   const encodedRange = encodeURIComponent(range);
-  // Append query params directly to URL (httpInstance may not support params object)
-  const url = `${domain}/open-apis/sheets/v2/spreadsheets/${spreadsheetToken}/values/${encodedRange}?valueRenderOption=ToString&dateTimeRenderOption=FormattedString`;
-  const res = await http.get(url);
+  const url = `/open-apis/sheets/v2/spreadsheets/${spreadsheetToken}/values/${encodedRange}?valueRenderOption=ToString&dateTimeRenderOption=FormattedString`;
+  
+  let res: any;
+  if (userTokenClient) {
+    res = await userTokenClient.get(url);
+  } else {
+    const { domain, http } = getHttpClient(client);
+    res = await http.get(`${domain}${url}`);
+  }
 
   if (res.code !== 0) {
     throw new Error(`Failed to read range: ${res.msg}`);
@@ -134,10 +151,11 @@ async function readRange(client: Lark.Client, spreadsheetToken: string, range: s
 async function readAll(
   client: Lark.Client,
   spreadsheetToken: string,
-  sheetId?: string
+  sheetId?: string,
+  userTokenClient?: UserTokenHttpClient
 ) {
   // Get sheet metadata
-  const sheetsInfo = await listSheets(client, spreadsheetToken);
+  const sheetsInfo = await listSheets(client, spreadsheetToken, userTokenClient);
   if (sheetsInfo.sheets.length === 0) {
     throw new Error("No sheets found in this spreadsheet");
   }
@@ -159,7 +177,7 @@ async function readAll(
   const endCol = colToLetter(maxCol);
   const range = `${targetSheet.sheet_id}!A1:${endCol}${maxRow}`;
 
-  const result = await readRange(client, spreadsheetToken, range);
+  const result = await readRange(client, spreadsheetToken, range, userTokenClient);
 
   return {
     ...result,
@@ -208,14 +226,14 @@ export function registerFeishuSheetTools(api: OpenClawPluginApi) {
             toolName: "feishu_sheet",
             requiredTool: "sheet",
             useUserToken: p.useUserToken,
-            run: async ({ client }) => {
+            run: async ({ client, userTokenClient }) => {
               switch (p.action) {
                 case "sheets":
-                  return json(await listSheets(client, p.spreadsheet_token));
+                  return json(await listSheets(client, p.spreadsheet_token, userTokenClient));
                 case "read":
-                  return json(await readRange(client, p.spreadsheet_token, p.range));
+                  return json(await readRange(client, p.spreadsheet_token, p.range, userTokenClient));
                 case "read_all":
-                  return json(await readAll(client, p.spreadsheet_token, p.sheet_id));
+                  return json(await readAll(client, p.spreadsheet_token, p.sheet_id, userTokenClient));
                 default:
                   return json({ error: `Unknown action: ${(p as any).action}` });
               }
