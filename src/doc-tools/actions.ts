@@ -141,6 +141,21 @@ async function deleteBlock(client: DocClient, docToken: string, blockId: string)
   return { success: true, deleted_block_id: blockId };
 }
 
+async function deleteDocument(client: DocClient, docToken: string) {
+  const res = await runDocApiCall("drive.file.delete", () =>
+    client.drive.file.delete({
+      path: { file_token: docToken },
+      params: { type: "docx" },
+    }),
+  );
+  if (res.code !== 0) throw new Error(res.msg ?? "Failed to delete document");
+  return {
+    success: true,
+    document_id: docToken,
+    task_id: res.data?.task_id,
+  };
+}
+
 async function listBlocks(client: DocClient, docToken: string) {
   const res = await runDocApiCall("docx.documentBlock.list", () =>
     client.docx.documentBlock.list({
@@ -308,6 +323,8 @@ export async function runDocAction(
       return getComment(client, params.doc_token, params.comment_id);
     case "list_comment_replies":
       return listCommentReplies(client, params.doc_token, params.comment_id, params.page_token, params.page_size);
+    case "delete":
+      return deleteDocument(client, params.doc_token);
     default:
       return { error: `Unknown action: ${(params as any).action}` };
   }

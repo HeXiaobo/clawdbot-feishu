@@ -46,6 +46,19 @@ export const FeishuDriveSchema = Type.Union([
     file_token: Type.String({ description: "File token to delete" }),
     type: FileType,
   }),
+
+  Type.Object({
+    action: Type.Literal("download"),
+    file_token: Type.String({
+      description:
+        "Sheet (电子表格) file token to download. Only supports Sheet files, not Bitable or other types.",
+    }),
+    file_name: Type.Optional(
+      Type.String({
+        description: "Optional file name for saving (will add .xlsx extension if not present)",
+      }),
+    ),
+  }),
   Type.Object({
     action: Type.Literal("import_document"),
     title: Type.String({

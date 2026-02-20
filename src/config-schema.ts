@@ -78,6 +78,7 @@ const DynamicAgentCreationSchema = z
  * - wiki requires doc (wiki content is edited via doc tools)
  * - perm can work independently but is typically used with drive
  * - task can work independently
+ * - sheet can work independently
  */
 const FeishuToolsConfigSchema = z
   .object({
@@ -86,6 +87,7 @@ const FeishuToolsConfigSchema = z
     drive: z.boolean().optional(), // Cloud storage operations (default: true)
     perm: z.boolean().optional(), // Permission management (default: false, sensitive)
     scopes: z.boolean().optional(), // App scopes diagnostic (default: true)
+    sheet: z.boolean().optional(), // Sheet operations (default: true)
     task: z.boolean().optional(), // Task operations (default: true)
   })
   .strict()

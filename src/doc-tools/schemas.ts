@@ -77,6 +77,10 @@ export const FeishuDocSchema = Type.Union([
       Type.Integer({ minimum: 1, description: "Page size, default 50 (positive integer)" }),
     ),
   }),
+  Type.Object({
+    action: Type.Literal("delete"),
+    doc_token: Type.String({ description: "Document token to delete" }),
+  }),
 ]);
 
 export type FeishuDocParams = Static<typeof FeishuDocSchema>;

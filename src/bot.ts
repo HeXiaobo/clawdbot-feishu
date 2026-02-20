@@ -28,6 +28,189 @@ import {
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { runWithFeishuToolContext } from "./tools-common/tool-context.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
+import { spawn } from "child_process";
+import fs from "fs";
+import path from "path";
+
+/** Run Python extraction script with file path as argv[1] to avoid command injection. */
+function runPythonExtract(script: string, filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const python = spawn("python3", ["-c", script, filePath], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    let stderr = "";
+    python.stdout?.on("data", (data) => (output += data.toString()));
+    python.stderr?.on("data", (data) => (stderr += data.toString()));
+    python.on("close", (code) => {
+      if (code === 0) resolve(output.trim());
+      else reject(new Error(`Python process exited with code ${code}: ${stderr || output}`));
+    });
+    python.on("error", (err) => reject(err));
+  });
+}
+
+// --- File processing config ---
+const FILE_PROCESSING_CONFIG = {
+  maxFileSizeMB: 10, // 最大处理文件大小 10MB
+  supportedTypes: [".pdf", ".docx", ".xlsx", ".doc", ".xls"] as const,
+  outputDir: "~/workspace/memory/feishu_files" as const,
+};
+
+// --- Helper: Check if file should be processed ---
+function shouldProcessFile(filePath: string, fileSize?: number): { shouldProcess: boolean; reason?: string } {
+  const ext = path.extname(filePath).toLowerCase();
+  
+  // Check file type
+  if (!FILE_PROCESSING_CONFIG.supportedTypes.includes(ext as any)) {
+    return { shouldProcess: false, reason: `Unsupported file type: ${ext}` };
+  }
+  
+  // Check file size
+  if (fileSize && fileSize > FILE_PROCESSING_CONFIG.maxFileSizeMB * 1024 * 1024) {
+    return { 
+      shouldProcess: false, 
+      reason: `File too large (${(fileSize / 1024 / 1024).toFixed(2)}MB > ${FILE_PROCESSING_CONFIG.maxFileSizeMB}MB limit)` 
+    };
+  }
+  
+  return { shouldProcess: true };
+}
+
+// --- Helper: Extract text from PDF using pdfplumber (path via argv, no injection) ---
+async function extractPdfText(filePath: string): Promise<string> {
+  const script = [
+    "import sys",
+    "import pdfplumber",
+    "path = sys.argv[1]",
+    "try:",
+    "    with pdfplumber.open(path) as pdf:",
+    "        text = chr(10).join([page.extract_text() or '' for page in pdf.pages])",
+    "        print(text[:50000])",
+    "except Exception as e:",
+    "    print(str(e), file=sys.stderr)",
+    "    sys.exit(1)",
+  ].join("\n");
+  try {
+    return await runPythonExtract(script, filePath);
+  } catch (err) {
+    throw new Error(`PDF extraction failed: ${err}`);
+  }
+}
+
+// --- Helper: Extract text from Word using python-docx (path via argv, no injection) ---
+async function extractDocxText(filePath: string): Promise<string> {
+  const script = [
+    "import sys",
+    "import docx",
+    "path = sys.argv[1]",
+    "try:",
+    "    doc = docx.Document(path)",
+    "    text = chr(10).join([para.text for para in doc.paragraphs])",
+    "    print(text[:50000])",
+    "except Exception as e:",
+    "    print(str(e), file=sys.stderr)",
+    "    sys.exit(1)",
+  ].join("\n");
+  try {
+    return await runPythonExtract(script, filePath);
+  } catch (err) {
+    throw new Error(`DOCX extraction failed: ${err}`);
+  }
+}
+
+// --- Helper: Extract text from Excel using openpyxl (path via argv, no injection) ---
+async function extractXlsxText(filePath: string): Promise<string> {
+  const script = [
+    "import sys",
+    "import openpyxl",
+    "path = sys.argv[1]",
+    "try:",
+    "    wb = openpyxl.load_workbook(path, data_only=True)",
+    "    output = []",
+    "    for sheet_name in wb.sheetnames[:3]:",
+    "        sheet = wb[sheet_name]",
+    "        output.append(chr(10) + '=== Sheet: ' + sheet_name + ' ===')",
+    "        for row in sheet.iter_rows(max_row=min(sheet.max_row, 100)):",
+    "            row_text = ' | '.join([str(cell.value) if cell.value is not None else '' for cell in row])",
+    "            if row_text.strip():",
+    "                output.append(row_text)",
+    "    result = chr(10).join(output)",
+    "    print(result[:50000])",
+    "except Exception as e:",
+    "    print(str(e), file=sys.stderr)",
+    "    sys.exit(1)",
+  ].join("\n");
+  try {
+    return await runPythonExtract(script, filePath);
+  } catch (err) {
+    throw new Error(`XLSX extraction failed: ${err}`);
+  }
+}
+
+// --- Helper: Process document file and save content ---
+async function processDocumentFile(
+  filePath: string,
+  fileName: string,
+  fileSize?: number,
+  log?: (msg: string) => void,
+): Promise<{ contentPath?: string; summary: string; error?: string }> {
+  const check = shouldProcessFile(filePath, fileSize);
+  if (!check.shouldProcess) {
+    return { summary: `[File not processed: ${check.reason}]`, error: check.reason };
+  }
+
+  const ext = path.extname(filePath).toLowerCase();
+  const baseName = path.basename(fileName, ext);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  
+  // Expand output dir
+  const outputDir = FILE_PROCESSING_CONFIG.outputDir.replace("~", process.env.HOME || "/root");
+  
+  // Ensure output directory exists
+  if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+  }
+
+  const contentFileName = `${timestamp}_${baseName}.txt`;
+  const contentPath = path.join(outputDir, contentFileName);
+
+  try {
+    log?.(`[FileProcessor] Extracting content from ${fileName} (${ext})...`);
+    
+    let content: string;
+    switch (ext) {
+      case ".pdf":
+        content = await extractPdfText(filePath);
+        break;
+      case ".docx":
+      case ".doc":
+        content = await extractDocxText(filePath);
+        break;
+      case ".xlsx":
+      case ".xls":
+        content = await extractXlsxText(filePath);
+        break;
+      default:
+        return { summary: `[Unsupported file type: ${ext}]`, error: `Unsupported: ${ext}` };
+    }
+
+    // Save content to file
+    const header = `=== File: ${fileName} ===\n=== Processed: ${new Date().toISOString()} ===\n=== Original: ${filePath} ===\n\n`;
+    fs.writeFileSync(contentPath, header + content, "utf-8");
+
+    const wordCount = content.split(/\s+/).length;
+    const summary = `[File processed: ${fileName}]\n[Content saved to: ${contentPath}]\n[Word count: ~${wordCount}]\n[Type: ${ext}]`;
+    
+    log?.(`[FileProcessor] Saved content to ${contentPath} (${wordCount} words)`);
+    
+    return { contentPath, summary };
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    log?.(`[FileProcessor] Error processing ${fileName}: ${errorMsg}`);
+    return { summary: `[File processing failed: ${errorMsg}]`, error: errorMsg };
+  }
+}
 
 // --- Permission error extraction ---
 // Extract permission grant URL from Feishu API error response.
@@ -780,7 +963,16 @@ export async function handleFeishuMessage(params: {
       log,
       accountId: account.accountId,
     });
-    const mediaPayload = buildFeishuMediaPayload(mediaList);
+
+    // Process document files (PDF/Excel/Word) and extract content
+    let fileProcessingSummary = "";
+    for (const media of mediaList) {
+      const fileSize = fs.existsSync(media.path) ? fs.statSync(media.path).size : undefined;
+      const result = await processDocumentFile(media.path, path.basename(media.path), fileSize, log);
+      if (result.summary) {
+        fileProcessingSummary += result.summary + "\n";
+      }
+    }
 
     // Fetch quoted/replied message content if parentId exists
     let quotedContent: string | undefined;
@@ -789,12 +981,46 @@ export async function handleFeishuMessage(params: {
         const quotedMsg = await getMessageFeishu({ cfg, messageId: ctx.parentId, accountId: account.accountId });
         if (quotedMsg) {
           quotedContent = quotedMsg.content;
-          log(`feishu[${account.accountId}]: fetched quoted message: ${quotedContent?.slice(0, 100)}`);
+          log(`feishu[${account.accountId}]: fetched quoted message (type=${quotedMsg.contentType}): ${quotedContent?.slice(0, 100)}`);
+
+          // If the quoted message contains media (file/image/audio/video), download it too
+          const quotedMediaTypes = ["file", "image", "audio", "media", "sticker"];
+          if (quotedMediaTypes.includes(quotedMsg.contentType)) {
+            log(`feishu[${account.accountId}]: quoted message is ${quotedMsg.contentType}, attempting media download`);
+            try {
+              const quotedMediaList = await resolveFeishuMediaList({
+                cfg,
+                messageId: ctx.parentId,
+                messageType: quotedMsg.contentType,
+                content: quotedMsg.content,
+                maxBytes: mediaMaxBytes,
+                log,
+                accountId: account.accountId,
+              });
+              if (quotedMediaList.length > 0) {
+                mediaList.push(...quotedMediaList);
+                log(`feishu[${account.accountId}]: downloaded ${quotedMediaList.length} media from quoted message`);
+
+                // Process document files from quoted message
+                for (const media of quotedMediaList) {
+                  const fileSize = fs.existsSync(media.path) ? fs.statSync(media.path).size : undefined;
+                  const result = await processDocumentFile(media.path, path.basename(media.path), fileSize, log);
+                  if (result.summary) {
+                    fileProcessingSummary += result.summary + "\n";
+                  }
+                }
+              }
+            } catch (quotedMediaErr) {
+              log(`feishu[${account.accountId}]: failed to download quoted message media: ${String(quotedMediaErr)}`);
+            }
+          }
         }
       } catch (err) {
         log(`feishu[${account.accountId}]: failed to fetch quoted message: ${String(err)}`);
       }
     }
+
+    const mediaPayload = buildFeishuMediaPayload(mediaList);
 
     const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
 
@@ -808,6 +1034,11 @@ export async function handleFeishuMessage(params: {
     // (DMs already have per-sender sessions, but the prefix is still useful for clarity.)
     const speaker = ctx.senderName ?? ctx.senderOpenId;
     messageBody = `${speaker}: ${messageBody}`;
+
+    // Add file processing summary if any files were processed
+    if (fileProcessingSummary) {
+      messageBody += `\n\n[System: File Processing Results]\n${fileProcessingSummary}`;
+    }
 
     // If there are mention targets, inform the agent that replies will auto-mention them
     if (ctx.mentionTargets && ctx.mentionTargets.length > 0) {
