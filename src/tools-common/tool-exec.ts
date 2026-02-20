@@ -5,7 +5,7 @@ import {
   resolveDefaultFeishuAccountId,
   resolveFeishuAccount,
 } from "../accounts.js";
-import { createFeishuClient, getUserAccessToken, hasUserAuth } from "../client.js";
+import { createFeishuClient, getUserAccessToken } from "../client.js";
 import { resolveToolsConfig } from "../tools-config.js";
 import { getCurrentFeishuToolContext } from "./tool-context.js";
 import type { FeishuToolsConfig, ResolvedFeishuAccount } from "../types.js";
@@ -122,25 +122,29 @@ export async function withFeishuToolClient<T>(params: {
   // Check if user token should be used (for external doc reading)
   let userTokenClient: UserTokenHttpClient | undefined;
   
-  if (params.useUserToken && hasUserAuth(account.accountId)) {
+  if (params.useUserToken) {
     try {
       const userToken = await getUserAccessToken(account.accountId);
       if (userToken) {
         const domain = account.domain === "lark" ? "https://open.larksuite.com" : "https://open.feishu.cn";
         userTokenClient = createUserTokenClient(userToken, domain);
-        
+
         // Try with user token first
         try {
-          return await params.run({ 
-            client: createFeishuClient(account), 
-            account, 
-            userTokenClient 
+          return await params.run({
+            client: createFeishuClient(account),
+            account,
+            userTokenClient,
           });
         } catch (userTokenErr) {
           // User token failed, log and fallback to tenant token
-          params.api.logger.debug?.(`User token failed for ${params.toolName}, falling back to tenant token: ${userTokenErr}`);
+          params.api.logger.debug?.(
+            `User token failed for ${params.toolName}, falling back to tenant token: ${userTokenErr}`,
+          );
           userTokenClient = undefined;
         }
+      } else {
+        params.api.logger.debug?.(`User token unavailable for ${params.toolName}, using tenant token`);
       }
     } catch (err) {
       params.api.logger.debug?.(`User token error for ${params.toolName}: ${err}`);
