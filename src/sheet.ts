@@ -1,9 +1,9 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { createFeishuClient } from "./client.js";
-import { listEnabledFeishuAccounts } from "./accounts.js";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { FeishuSheetSchema, type FeishuSheetParams } from "./sheet-schema.js";
 import { resolveToolsConfig } from "./tools-config.js";
+import { withFeishuToolClient } from "./tools-common/tool-exec.js";
+import { listEnabledFeishuAccounts } from "./accounts.js";
 
 // ============ Helpers ============
 
@@ -190,8 +190,6 @@ export function registerFeishuSheetTools(api: OpenClawPluginApi) {
     return;
   }
 
-  const getClient = () => createFeishuClient(firstAccount);
-
   api.registerTool(
     {
       name: "feishu_sheet",
@@ -199,22 +197,31 @@ export function registerFeishuSheetTools(api: OpenClawPluginApi) {
       description:
         "Feishu spreadsheet (电子表格) operations. Read cell data from Sheets (not Bitable). " +
         "Actions: sheets (list worksheets), read (read range), read_all (read entire sheet). " +
-        "Use wiki get first to resolve wiki URLs to spreadsheet_token (obj_token).",
+        "Use wiki get first to resolve wiki URLs to spreadsheet_token (obj_token). " +
+        "Set useUserToken=true to read external tenant docs with user OAuth.",
       parameters: FeishuSheetSchema,
       async execute(_toolCallId, params) {
         const p = params as FeishuSheetParams;
         try {
-          const client = getClient();
-          switch (p.action) {
-            case "sheets":
-              return json(await listSheets(client, p.spreadsheet_token));
-            case "read":
-              return json(await readRange(client, p.spreadsheet_token, p.range));
-            case "read_all":
-              return json(await readAll(client, p.spreadsheet_token, p.sheet_id));
-            default:
-              return json({ error: `Unknown action: ${(p as any).action}` });
-          }
+          const result = await withFeishuToolClient({
+            api,
+            toolName: "feishu_sheet",
+            requiredTool: "sheet",
+            useUserToken: p.useUserToken,
+            run: async ({ client }) => {
+              switch (p.action) {
+                case "sheets":
+                  return json(await listSheets(client, p.spreadsheet_token));
+                case "read":
+                  return json(await readRange(client, p.spreadsheet_token, p.range));
+                case "read_all":
+                  return json(await readAll(client, p.spreadsheet_token, p.sheet_id));
+                default:
+                  return json({ error: `Unknown action: ${(p as any).action}` });
+              }
+            },
+          });
+          return result;
         } catch (err) {
           return json({ error: err instanceof Error ? err.message : String(err) });
         }

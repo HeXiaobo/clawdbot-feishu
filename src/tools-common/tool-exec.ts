@@ -5,7 +5,7 @@ import {
   resolveDefaultFeishuAccountId,
   resolveFeishuAccount,
 } from "../accounts.js";
-import { createFeishuClient } from "../client.js";
+import { createFeishuClient, getUserAccessToken, hasUserAuth } from "../client.js";
 import { resolveToolsConfig } from "../tools-config.js";
 import { getCurrentFeishuToolContext } from "./tool-context.js";
 import type { FeishuToolsConfig, ResolvedFeishuAccount } from "../types.js";
@@ -38,10 +38,14 @@ export function resolveToolAccount(cfg: ClawdbotConfig): ResolvedFeishuAccount {
   return resolveFeishuAccount({ cfg, accountId: resolveDefaultFeishuAccountId(cfg) });
 }
 
+/**
+ * Execute tool with user token (for external docs) with fallback to tenant token
+ */
 export async function withFeishuToolClient<T>(params: {
   api: OpenClawPluginApi;
   toolName: string;
   requiredTool?: FeishuToolFlag;
+  useUserToken?: boolean; // Enable user token for external doc reading
   run: (args: { client: Lark.Client; account: ResolvedFeishuAccount }) => Promise<T>;
 }): Promise<T> {
   if (!params.api.config) {
@@ -68,6 +72,60 @@ export async function withFeishuToolClient<T>(params: {
     }
   }
 
+  // Check if user token should be used (for external doc reading)
+  if (params.useUserToken && hasUserAuth(account.accountId)) {
+    try {
+      const userToken = await getUserAccessToken(account.accountId);
+      if (userToken) {
+        // Create a client with user token
+        const domain = account.domain === "lark" ? "https://open.larksuite.com" : "https://open.feishu.cn";
+        const userClient = {
+          ...createFeishuClient(account),
+          // Override the request method to use user token
+          request: async (options: any) => {
+            const url = typeof options === "string" ? options : options.url;
+            const method = typeof options === "string" ? "GET" : (options.method || "GET");
+            const headers = {
+              "Authorization": `Bearer ${userToken}`,
+              "Content-Type": "application/json",
+              ...(typeof options !== "string" ? options.headers : {}),
+            };
+            
+            const fetchOptions: RequestInit = {
+              method,
+              headers,
+            };
+            
+            if (typeof options === "object" && options.body) {
+              fetchOptions.body = typeof options.body === "string" 
+                ? options.body 
+                : JSON.stringify(options.body);
+            }
+            
+            const response = await fetch(url.startsWith("http") ? url : `${domain}${url}`, fetchOptions);
+            
+            if (!response.ok) {
+              const errorText = await response.text();
+              throw new Error(`HTTP ${response.status}: ${errorText}`);
+            }
+            
+            return response.json();
+          },
+        } as unknown as Lark.Client;
+        
+        try {
+          return await params.run({ client: userClient, account });
+        } catch (userTokenErr) {
+          // User token failed, log and fallback to tenant token
+          params.api.logger.debug?.(`User token failed for ${params.toolName}, falling back to tenant token: ${userTokenErr}`);
+        }
+      }
+    } catch (err) {
+      params.api.logger.debug?.(`User token error for ${params.toolName}: ${err}`);
+    }
+  }
+
+  // Fall back to tenant token (default behavior)
   const client = createFeishuClient(account);
   return params.run({ client, account });
 }
