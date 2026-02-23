@@ -115,6 +115,17 @@ export const FeishuGroupSchema = z
   })
   .strict();
 
+const FeishuUserAuthSchema = z
+  .object({
+    enabled: z.boolean().optional().default(false),
+    accessToken: z.string().optional(),
+    refreshToken: z.string().optional(),
+    openId: z.string().optional(),
+    expiresAt: z.string().datetime().optional(),
+  })
+  .strict()
+  .optional();
+
 /**
  * Per-account configuration.
  * All fields are optional - missing fields inherit from top-level config.
@@ -151,6 +162,8 @@ export const FeishuAccountConfigSchema = z
     renderMode: RenderModeSchema,
     streaming: StreamingModeSchema,
     tools: FeishuToolsConfigSchema,
+    // User OAuth for external doc reading
+    userAuth: FeishuUserAuthSchema,
   })
   .strict();
 

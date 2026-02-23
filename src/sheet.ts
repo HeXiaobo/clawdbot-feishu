@@ -1,9 +1,9 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { createFeishuClient } from "./client.js";
-import { listEnabledFeishuAccounts } from "./accounts.js";
-import type * as Lark from "@larksuiteoapi/node-sdk";
+import type { ResolvedFeishuAccount } from "./types.js";
 import { FeishuSheetSchema, type FeishuSheetParams } from "./sheet-schema.js";
 import { resolveToolsConfig } from "./tools-config.js";
+import { withFeishuToolClient, type UserTokenHttpClient } from "./tools-common/tool-exec.js";
+import { listEnabledFeishuAccounts } from "./accounts.js";
 
 // ============ Helpers ============
 
@@ -67,26 +67,67 @@ function colToLetter(col: number): string {
   return result;
 }
 
-/** Get HTTP client from Lark client */
-function getHttpClient(client: Lark.Client) {
-  const domain = (client as any).domain ?? "https://open.feishu.cn";
-  const http = (client as any).httpInstance;
-  return { domain, http };
+function resolveOpenApiBase(domain?: string): string {
+  if (!domain || domain === "feishu") return "https://open.feishu.cn";
+  if (domain === "lark") return "https://open.larksuite.com";
+  if (domain.startsWith("http://") || domain.startsWith("https://")) return domain.replace(/\/+$/, "");
+  return `https://${domain.replace(/\/+$/, "")}`;
+}
+
+function createBearerHttpClient(accessToken: string, baseUrl: string): UserTokenHttpClient {
+  async function request(method: string, url: string, body?: any): Promise<any> {
+    const fullUrl = url.startsWith("http") ? url : `${baseUrl}${url}`;
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    };
+
+    const fetchOptions: RequestInit = { method, headers };
+    if (body !== undefined) {
+      fetchOptions.body = typeof body === "string" ? body : JSON.stringify(body);
+    }
+
+    const response = await fetch(fullUrl, fetchOptions);
+    const data = await response.json();
+
+    if (!response.ok || data.code !== 0) {
+      throw new Error(data.msg || `HTTP ${response.status}`);
+    }
+    return data;
+  }
+
+  return {
+    get: (url: string) => request("GET", url),
+    post: (url: string, body?: any) => request("POST", url, body),
+  };
+}
+
+async function createTenantHttpClient(account: ResolvedFeishuAccount): Promise<UserTokenHttpClient> {
+  const baseUrl = resolveOpenApiBase(account.domain);
+  if (!account.appId || !account.appSecret) {
+    throw new Error(`Feishu credentials missing for account ${account.accountId}`);
+  }
+
+  const tokenResp = await fetch(`${baseUrl}/open-apis/auth/v3/tenant_access_token/internal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ app_id: account.appId, app_secret: account.appSecret }),
+  });
+
+  const tokenData = await tokenResp.json();
+  if (!tokenResp.ok || tokenData.code !== 0 || !tokenData.tenant_access_token) {
+    throw new Error(tokenData.msg || `Failed to get tenant access token (HTTP ${tokenResp.status})`);
+  }
+
+  return createBearerHttpClient(tokenData.tenant_access_token, baseUrl);
 }
 
 // ============ Actions ============
 
 /** Get all sheets in a spreadsheet */
-async function listSheets(client: Lark.Client, spreadsheetToken: string) {
-  const { domain, http } = getHttpClient(client);
-
-  const res = await http.get(
-    `${domain}/open-apis/sheets/v3/spreadsheets/${spreadsheetToken}/sheets/query`
-  );
-
-  if (res.code !== 0) {
-    throw new Error(`Failed to list sheets: ${res.msg}`);
-  }
+async function listSheets(httpClient: UserTokenHttpClient, spreadsheetToken: string) {
+  const url = `/open-apis/sheets/v3/spreadsheets/${spreadsheetToken}/sheets/query`;
+  const res: any = await httpClient.get(url);
 
   const sheets = res.data?.sheets ?? [];
   return {
@@ -103,17 +144,10 @@ async function listSheets(client: Lark.Client, spreadsheetToken: string) {
 }
 
 /** Read data from a specific range */
-async function readRange(client: Lark.Client, spreadsheetToken: string, range: string) {
-  const { domain, http } = getHttpClient(client);
-
+async function readRange(httpClient: UserTokenHttpClient, spreadsheetToken: string, range: string) {
   const encodedRange = encodeURIComponent(range);
-  // Append query params directly to URL (httpInstance may not support params object)
-  const url = `${domain}/open-apis/sheets/v2/spreadsheets/${spreadsheetToken}/values/${encodedRange}?valueRenderOption=ToString&dateTimeRenderOption=FormattedString`;
-  const res = await http.get(url);
-
-  if (res.code !== 0) {
-    throw new Error(`Failed to read range: ${res.msg}`);
-  }
+  const url = `/open-apis/sheets/v2/spreadsheets/${spreadsheetToken}/values/${encodedRange}?valueRenderOption=ToString&dateTimeRenderOption=FormattedString`;
+  const res: any = await httpClient.get(url);
 
   // API returns camelCase: valueRange (not value_range)
   const valueRange = res.data?.valueRange ?? res.data?.value_range ?? {};
@@ -131,13 +165,9 @@ async function readRange(client: Lark.Client, spreadsheetToken: string, range: s
 }
 
 /** Read all data from a sheet */
-async function readAll(
-  client: Lark.Client,
-  spreadsheetToken: string,
-  sheetId?: string
-) {
+async function readAll(httpClient: UserTokenHttpClient, spreadsheetToken: string, sheetId?: string) {
   // Get sheet metadata
-  const sheetsInfo = await listSheets(client, spreadsheetToken);
+  const sheetsInfo = await listSheets(httpClient, spreadsheetToken);
   if (sheetsInfo.sheets.length === 0) {
     throw new Error("No sheets found in this spreadsheet");
   }
@@ -147,7 +177,11 @@ async function readAll(
   if (sheetId) {
     targetSheet = sheetsInfo.sheets.find((s: any) => s.sheet_id === sheetId);
     if (!targetSheet) {
-      throw new Error(`Sheet "${sheetId}" not found. Available: ${sheetsInfo.sheets.map((s: any) => `${s.sheet_id} (${s.title})`).join(", ")}`);
+      throw new Error(
+        `Sheet "${sheetId}" not found. Available: ${sheetsInfo.sheets
+          .map((s: any) => `${s.sheet_id} (${s.title})`)
+          .join(", ")}`,
+      );
     }
   } else {
     targetSheet = sheetsInfo.sheets[0];
@@ -159,7 +193,7 @@ async function readAll(
   const endCol = colToLetter(maxCol);
   const range = `${targetSheet.sheet_id}!A1:${endCol}${maxRow}`;
 
-  const result = await readRange(client, spreadsheetToken, range);
+  const result = await readRange(httpClient, spreadsheetToken, range);
 
   return {
     ...result,
@@ -190,8 +224,6 @@ export function registerFeishuSheetTools(api: OpenClawPluginApi) {
     return;
   }
 
-  const getClient = () => createFeishuClient(firstAccount);
-
   api.registerTool(
     {
       name: "feishu_sheet",
@@ -199,28 +231,39 @@ export function registerFeishuSheetTools(api: OpenClawPluginApi) {
       description:
         "Feishu spreadsheet (电子表格) operations. Read cell data from Sheets (not Bitable). " +
         "Actions: sheets (list worksheets), read (read range), read_all (read entire sheet). " +
-        "Use wiki get first to resolve wiki URLs to spreadsheet_token (obj_token).",
+        "Use wiki get first to resolve wiki URLs to spreadsheet_token (obj_token). " +
+        "Set useUserToken=true to read external tenant docs with user OAuth.",
       parameters: FeishuSheetSchema,
       async execute(_toolCallId, params) {
         const p = params as FeishuSheetParams;
         try {
-          const client = getClient();
-          switch (p.action) {
-            case "sheets":
-              return json(await listSheets(client, p.spreadsheet_token));
-            case "read":
-              return json(await readRange(client, p.spreadsheet_token, p.range));
-            case "read_all":
-              return json(await readAll(client, p.spreadsheet_token, p.sheet_id));
-            default:
-              return json({ error: `Unknown action: ${(p as any).action}` });
-          }
+          const result = await withFeishuToolClient({
+            api,
+            toolName: "feishu_sheet",
+            requiredTool: "sheet",
+            useUserToken: p.useUserToken,
+            run: async ({ account, userTokenClient }) => {
+              const httpClient = userTokenClient ?? (await createTenantHttpClient(account));
+
+              switch (p.action) {
+                case "sheets":
+                  return json(await listSheets(httpClient, p.spreadsheet_token));
+                case "read":
+                  return json(await readRange(httpClient, p.spreadsheet_token, p.range));
+                case "read_all":
+                  return json(await readAll(httpClient, p.spreadsheet_token, p.sheet_id));
+                default:
+                  return json({ error: `Unknown action: ${(p as any).action}` });
+              }
+            },
+          });
+          return result;
         } catch (err) {
           return json({ error: err instanceof Error ? err.message : String(err) });
         }
       },
     },
-    { name: "feishu_sheet" }
+    { name: "feishu_sheet" },
   );
 
   api.logger.info?.("feishu_sheet: Registered feishu_sheet tool");

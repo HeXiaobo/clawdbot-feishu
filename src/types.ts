@@ -71,6 +71,17 @@ export type FeishuToolsConfig = {
   task?: boolean;
 };
 
+/**
+ * User OAuth authentication configuration for reading external tenant docs
+ */
+export type FeishuUserAuth = {
+  enabled: boolean;
+  accessToken?: string;
+  refreshToken?: string;
+  openId?: string;
+  expiresAt?: string; // ISO 8601 timestamp
+};
+
 export type DynamicAgentCreationConfig = {
   enabled?: boolean;
   workspaceTemplate?: string;

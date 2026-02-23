@@ -1,6 +1,7 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk";
 import type { FeishuConfig, FeishuAccountConfig, FeishuDomain, ResolvedFeishuAccount } from "./types.js";
+import { initUserTokenCache } from "./client.js";
 
 /**
  * List all configured account IDs from the accounts field.
@@ -116,7 +117,7 @@ export function resolveFeishuAccount(params: {
   // Resolve credentials from merged config
   const creds = resolveFeishuCredentials(merged);
 
-  return {
+  const result: ResolvedFeishuAccount = {
     accountId,
     enabled,
     configured: Boolean(creds),
@@ -128,6 +129,17 @@ export function resolveFeishuAccount(params: {
     domain: creds?.domain ?? "feishu",
     config: merged,
   };
+
+  // Initialize user token cache if userAuth is configured
+  if (merged.userAuth?.enabled && creds) {
+    initUserTokenCache(accountId, merged.userAuth, {
+      appId: creds.appId,
+      appSecret: creds.appSecret,
+      domain: creds.domain,
+    });
+  }
+
+  return result;
 }
 
 /**
