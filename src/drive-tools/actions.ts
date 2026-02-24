@@ -207,6 +207,55 @@ async function importDocument(
   return createAndWriteDoc(client, title, content, mediaMaxBytes, folderToken);
 }
 
+async function uploadLocalFile(
+  client: DriveClient,
+  folderToken: string,
+  inputPath: string,
+  name?: string,
+  mediaMaxBytes?: number,
+) {
+  const resolved = path.resolve(inputPath);
+  const stat = await fs.promises.stat(resolved).catch(() => null);
+  if (!stat || !stat.isFile()) {
+    throw new Error(`Local file not found: ${resolved}`);
+  }
+
+  if (mediaMaxBytes && stat.size > mediaMaxBytes) {
+    throw new Error(
+      `File too large: ${Math.ceil(stat.size / (1024 * 1024))}MB > ${Math.ceil(mediaMaxBytes / (1024 * 1024))}MB (drive uploadAll limit is 20MB)`,
+    );
+  }
+
+  // Feishu upload_all hard limit is 20MB.
+  const hardLimit = 20 * 1024 * 1024;
+  if (stat.size > hardLimit) {
+    throw new Error(`File too large for drive uploadAll: ${Math.ceil(stat.size / (1024 * 1024))}MB > 20MB`);
+  }
+
+  const fileName = (name?.trim() || path.basename(resolved) || "upload.bin").trim();
+  const stream = fs.createReadStream(resolved);
+
+  const res = await runDriveApiCall("drive.file.uploadAll", () =>
+    client.drive.file.uploadAll({
+      data: {
+        file_name: fileName,
+        parent_type: "explorer",
+        parent_node: folderToken,
+        size: stat.size,
+        file: stream,
+      },
+    }),
+  );
+
+  return {
+    success: true,
+    file_token: (res as any)?.file_token,
+    name: fileName,
+    size: stat.size,
+    folder_token: folderToken,
+  };
+}
+
 export async function runDriveAction(
   client: DriveClient,
   params: FeishuDriveParams,
@@ -225,6 +274,13 @@ export async function runDriveAction(
       return deleteFile(client, params.file_token, params.type);
     case "download":
       return downloadDriveResource(client, params.file_token, params.save_to, params.prefer_media);
+    case "upload": {
+      const localPath = (params as any).path || (params as any).file_path;
+      if (!localPath || typeof localPath !== "string") {
+        throw new Error("upload requires `path` (or `file_path`) to a local file");
+      }
+      return uploadLocalFile(client, params.folder_token, localPath, (params as any).name, mediaMaxBytes);
+    }
     case "import_document":
       return importDocument(
         client,

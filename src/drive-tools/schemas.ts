@@ -58,6 +58,13 @@ export const FeishuDriveSchema = Type.Union([
     ),
   }),
   Type.Object({
+    action: Type.Literal("upload"),
+    folder_token: Type.String({ description: "Target folder token" }),
+    path: Type.Optional(Type.String({ description: "Local file path to upload" })),
+    file_path: Type.Optional(Type.String({ description: "Alias of path" })),
+    name: Type.Optional(Type.String({ description: "Optional file name override" })),
+  }),
+  Type.Object({
     action: Type.Literal("import_document"),
     title: Type.String({
       description: "Document title",
