@@ -462,6 +462,24 @@ export async function sendMediaFeishu(params: {
   }
   const mediaMaxBytes = (account.config?.mediaMaxMb ?? 30) * 1024 * 1024;
 
+  const resolveLocalMediaPath = (raw: string): string | null => {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+
+    // Accept plain absolute/relative paths.
+    if (!/^https?:\/\//i.test(trimmed) && !/^file:/i.test(trimmed)) {
+      return path.resolve(trimmed);
+    }
+
+    // Accept file:/tmp/a.png and file:///tmp/a.png formats.
+    if (/^file:/i.test(trimmed)) {
+      const withoutScheme = trimmed.replace(/^file:\/+/i, "/");
+      return path.resolve(withoutScheme);
+    }
+
+    return null;
+  };
+
   let buffer: Buffer;
   let name: string;
 
@@ -469,12 +487,27 @@ export async function sendMediaFeishu(params: {
     buffer = mediaBuffer;
     name = fileName ?? "file";
   } else if (mediaUrl) {
-    const loaded = await getFeishuRuntime().media.loadWebMedia(mediaUrl, {
-      maxBytes: mediaMaxBytes,
-      optimizeImages: false,
-    });
-    buffer = loaded.buffer;
-    name = fileName ?? loaded.fileName ?? "file";
+    const localPath = resolveLocalMediaPath(mediaUrl);
+    if (localPath) {
+      const stat = await fs.promises.stat(localPath).catch(() => null);
+      if (!stat || !stat.isFile()) {
+        throw new Error(`Local media file not found: ${localPath}`);
+      }
+      if (stat.size > mediaMaxBytes) {
+        throw new Error(
+          `Local media file too large: ${Math.ceil(stat.size / (1024 * 1024))}MB > ${Math.ceil(mediaMaxBytes / (1024 * 1024))}MB`,
+        );
+      }
+      buffer = await fs.promises.readFile(localPath);
+      name = fileName ?? path.basename(localPath) ?? "file";
+    } else {
+      const loaded = await getFeishuRuntime().media.loadWebMedia(mediaUrl, {
+        maxBytes: mediaMaxBytes,
+        optimizeImages: false,
+      });
+      buffer = loaded.buffer;
+      name = fileName ?? loaded.fileName ?? "file";
+    }
   } else {
     throw new Error("Either mediaUrl or mediaBuffer must be provided");
   }
