@@ -1,6 +1,9 @@
 import { createAndWriteDoc } from "../doc-write-service.js";
 import { runDriveApiCall, type DriveClient } from "./common.js";
 import type { FeishuDriveParams } from "./schemas.js";
+import fs from "fs";
+import os from "os";
+import path from "path";
 
 type DriveMoveType = "doc" | "docx" | "sheet" | "bitable" | "folder" | "file" | "mindnote" | "slides";
 type DriveDeleteType = DriveMoveType | "shortcut";
@@ -135,6 +138,59 @@ async function deleteFile(client: DriveClient, fileToken: string, type: string) 
   };
 }
 
+function sanitizeFileName(name: string): string {
+  return name.replace(/[\\/:*?"<>|]/g, "_").trim() || "download";
+}
+
+async function downloadDriveResource(
+  client: DriveClient,
+  fileToken: string,
+  saveTo?: string,
+  preferMedia?: boolean,
+) {
+  const outputPath = saveTo ? path.resolve(saveTo) : path.join(os.tmpdir(), "feishu-downloads", fileToken);
+  await fs.promises.mkdir(path.dirname(outputPath), { recursive: true });
+
+  const errors: Array<{ api: "file.download" | "media.download"; error: string }> = [];
+  const useMediaFirst = Boolean(preferMedia);
+  const apis: Array<"file" | "media"> = useMediaFirst ? ["media", "file"] : ["file", "media"];
+
+  for (const apiType of apis) {
+    try {
+      const response =
+        apiType === "file"
+          ? await client.drive.file.download({ path: { file_token: fileToken } })
+          : await client.drive.media.download({ path: { file_token: fileToken } });
+
+      await response.writeFile(outputPath);
+      const stats = await fs.promises.stat(outputPath);
+      const headerName = String(response.headers?.["content-disposition"] ?? "");
+      const matched = /filename\*?=(?:UTF-8''|"?)([^";]+)/i.exec(headerName);
+      const remoteName = matched?.[1] ? decodeURIComponent(matched[1].replace(/"/g, "")) : undefined;
+      const finalPath = saveTo || !remoteName ? outputPath : path.join(path.dirname(outputPath), sanitizeFileName(remoteName));
+
+      if (finalPath !== outputPath) {
+        await fs.promises.rename(outputPath, finalPath);
+      }
+
+      return {
+        success: true,
+        file_token: fileToken,
+        saved_to: finalPath,
+        bytes: stats.size,
+        api_used: apiType === "file" ? "drive.file.download" : "drive.media.download",
+        fallback_used: apiType === apis[0] ? false : true,
+      };
+    } catch (err) {
+      errors.push({ api: apiType === "file" ? "file.download" : "media.download", error: String(err) });
+    }
+  }
+
+  const hint =
+    "Token 可能不是可下载的云盘文件，或应用无权限。可尝试传 prefer_media=true（优先走素材下载）或确认该 token 已分享给应用。";
+  throw new Error(`Drive download failed for token ${fileToken}. ${hint} Attempts: ${errors.map((e) => `${e.api}: ${e.error}`).join(" | ")}`);
+}
+
 /**
  * Import markdown content as a new Feishu document.
  * Uses create + write approach for reliable content import.
@@ -167,6 +223,8 @@ export async function runDriveAction(
       return moveFile(client, params.file_token, params.type, params.folder_token);
     case "delete":
       return deleteFile(client, params.file_token, params.type);
+    case "download":
+      return downloadDriveResource(client, params.file_token, params.save_to, params.prefer_media);
     case "import_document":
       return importDocument(
         client,
