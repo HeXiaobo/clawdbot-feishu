@@ -50,13 +50,11 @@ export const FeishuDriveSchema = Type.Union([
   Type.Object({
     action: Type.Literal("download"),
     file_token: Type.String({
-      description:
-        "Sheet (电子表格) file token to download. Only supports Sheet files, not Bitable or other types.",
+      description: "File token to download (supports Drive file/download and media/download with fallback)",
     }),
-    file_name: Type.Optional(
-      Type.String({
-        description: "Optional file name for saving (will add .xlsx extension if not present)",
-      }),
+    save_to: Type.Optional(Type.String({ description: "Optional absolute/relative output path" })),
+    prefer_media: Type.Optional(
+      Type.Boolean({ description: "Prefer drive.media.download first (for doc attachments/images)" }),
     ),
   }),
   Type.Object({
