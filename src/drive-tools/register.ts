@@ -59,7 +59,7 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
     name: "feishu_drive",
     label: "Feishu Drive",
     description:
-      "Feishu cloud storage operations. Actions: list, info, create_folder, move, delete, download, import_document. Use 'download' for Drive file/media retrieval and 'import_document' to create docs from Markdown.",
+      "Feishu cloud storage operations. Actions: list, info, create_folder, move, delete, download, upload, import_document. Use 'download' for Drive file/media retrieval, 'upload' for local file upload to Drive folders, and 'import_document' to create docs from Markdown.",
     parameters: FeishuDriveSchema,
     run: async ({ client, account }, params) => {
       const mediaMaxBytes = (account.config?.mediaMaxMb ?? 30) * 1024 * 1024;
