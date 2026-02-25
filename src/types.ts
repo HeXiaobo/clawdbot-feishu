@@ -69,6 +69,7 @@ export type FeishuToolsConfig = {
   scopes?: boolean;
   sheet?: boolean;
   task?: boolean;
+  calendar?: boolean;
 };
 
 /**
