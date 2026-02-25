@@ -99,6 +99,7 @@ function createBearerHttpClient(accessToken: string, baseUrl: string): UserToken
   return {
     get: (url: string) => request("GET", url),
     post: (url: string, body?: any) => request("POST", url, body),
+    put: (url: string, body?: any) => request("PUT", url, body),
   };
 }
 
@@ -202,6 +203,45 @@ async function readAll(httpClient: UserTokenHttpClient, spreadsheetToken: string
   };
 }
 
+/** Write values to a specific range */
+async function writeRange(
+  httpClient: UserTokenHttpClient,
+  spreadsheetToken: string,
+  range: string,
+  values: unknown[][],
+  valueInputOption: "RAW" | "USER_ENTERED" = "USER_ENTERED",
+) {
+  if (!Array.isArray(values) || values.length === 0) {
+    throw new Error("values must be a non-empty 2D array");
+  }
+
+  const encodedRange = encodeURIComponent(range);
+  const previewUrl = `/open-apis/sheets/v2/spreadsheets/${spreadsheetToken}/values/${encodedRange}?valueRenderOption=ToString&dateTimeRenderOption=FormattedString`;
+  const writeUrl = `/open-apis/sheets/v2/spreadsheets/${spreadsheetToken}/values?valueInputOption=${encodeURIComponent(valueInputOption)}`;
+
+  const writeResp: any = await httpClient.put(writeUrl, {
+    valueRange: {
+      range,
+      values,
+    },
+  });
+
+  const readBack: any = await httpClient.get(previewUrl);
+  const valueRange = readBack.data?.valueRange ?? readBack.data?.value_range ?? {};
+
+  return {
+    spreadsheet_token: spreadsheetToken,
+    range: writeResp.data?.updatedRange ?? range,
+    value_input_option: valueInputOption,
+    updated_rows: writeResp.data?.updatedRows ?? 0,
+    updated_columns: writeResp.data?.updatedColumns ?? 0,
+    updated_cells: writeResp.data?.updatedCells ?? 0,
+    revision: writeResp.data?.revision,
+    read_back: valueRange.values ?? [],
+    table: formatAsTable(valueRange.values ?? []),
+  };
+}
+
 // ============ Tool Registration ============
 
 export function registerFeishuSheetTools(api: OpenClawPluginApi) {
@@ -229,10 +269,10 @@ export function registerFeishuSheetTools(api: OpenClawPluginApi) {
       name: "feishu_sheet",
       label: "Feishu Sheet",
       description:
-        "Feishu spreadsheet (电子表格) operations. Read cell data from Sheets (not Bitable). " +
-        "Actions: sheets (list worksheets), read (read range), read_all (read entire sheet). " +
+        "Feishu spreadsheet (电子表格) operations. Read/write cell data from Sheets (not Bitable). " +
+        "Actions: sheets (list worksheets), read (read range), read_all (read entire sheet), write_range (write/update cells). " +
         "Use wiki get first to resolve wiki URLs to spreadsheet_token (obj_token). " +
-        "Set useUserToken=true to read external tenant docs with user OAuth.",
+        "Set useUserToken=true to access external tenant docs with user OAuth.",
       parameters: FeishuSheetSchema,
       async execute(_toolCallId, params) {
         const p = params as FeishuSheetParams;
@@ -252,6 +292,16 @@ export function registerFeishuSheetTools(api: OpenClawPluginApi) {
                   return json(await readRange(httpClient, p.spreadsheet_token, p.range));
                 case "read_all":
                   return json(await readAll(httpClient, p.spreadsheet_token, p.sheet_id));
+                case "write_range":
+                  return json(
+                    await writeRange(
+                      httpClient,
+                      p.spreadsheet_token,
+                      p.range,
+                      p.values,
+                      p.valueInputOption ?? "USER_ENTERED",
+                    ),
+                  );
                 default:
                   return json({ error: `Unknown action: ${(p as any).action}` });
               }

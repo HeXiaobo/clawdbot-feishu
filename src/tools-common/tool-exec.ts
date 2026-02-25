@@ -44,6 +44,7 @@ export function resolveToolAccount(cfg: ClawdbotConfig): ResolvedFeishuAccount {
 export interface UserTokenHttpClient {
   get: (url: string) => Promise<any>;
   post: (url: string, body?: any) => Promise<any>;
+  put: (url: string, body?: any) => Promise<any>;
 }
 
 /**
@@ -78,6 +79,7 @@ function createUserTokenClient(userToken: string, domain: string): UserTokenHttp
   return {
     get: (url: string) => request("GET", url),
     post: (url: string, body?: any) => request("POST", url, body),
+    put: (url: string, body?: any) => request("PUT", url, body),
   };
 }
 
