@@ -85,6 +85,7 @@ export async function listRecords(
   tableId: string,
   pageSize?: number,
   pageToken?: string,
+  viewId?: string,
 ) {
   const res = await runBitableApiCall("bitable.appTableRecord.list", () =>
     client.bitable.appTableRecord.list({
@@ -92,6 +93,7 @@ export async function listRecords(
       params: {
         page_size: pageSize ?? 100,
         ...(pageToken && { page_token: pageToken }),
+        ...(viewId && { view_id: viewId }),
       },
     }),
   );
