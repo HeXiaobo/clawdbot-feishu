@@ -19,7 +19,7 @@ type ToolSpec<P> = {
   label: string;
   description: string;
   parameters: TSchema;
-  run: (client: CalendarClient, params: P) => Promise<unknown>;
+  run: (client: CalendarClient, params: P, options?: { userAccessToken?: string }) => Promise<unknown>;
 };
 
 type UseUserTokenParams = {
@@ -40,7 +40,8 @@ function registerCalendarTool<P extends UseUserTokenParams>(api: OpenClawPluginA
             toolName: spec.name,
             requiredTool: "calendar",
             useUserToken: (params as P).useUserToken,
-            run: async ({ client }) => json(await spec.run(client as CalendarClient, params as P)),
+            run: async ({ client, userAccessToken }) =>
+              json(await spec.run(client as CalendarClient, params as P, { userAccessToken })),
           });
         } catch (err) {
           return errorResult(err);

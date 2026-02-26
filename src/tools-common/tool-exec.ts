@@ -91,10 +91,11 @@ export async function withFeishuToolClient<T>(params: {
   toolName: string;
   requiredTool?: FeishuToolFlag;
   useUserToken?: boolean; // Enable user token for external doc reading
-  run: (args: { 
-    client: Lark.Client; 
+  run: (args: {
+    client: Lark.Client;
     account: ResolvedFeishuAccount;
     userTokenClient?: UserTokenHttpClient;
+    userAccessToken?: string;
   }) => Promise<T>;
 }): Promise<T> {
   if (!params.api.config) {
@@ -137,6 +138,7 @@ export async function withFeishuToolClient<T>(params: {
             client: createFeishuClient(account),
             account,
             userTokenClient,
+            userAccessToken: userToken,
           });
         } catch (userTokenErr) {
           // User token failed, log and fallback to tenant token
@@ -155,5 +157,5 @@ export async function withFeishuToolClient<T>(params: {
 
   // Fall back to tenant token (default behavior)
   const client = createFeishuClient(account);
-  return params.run({ client, account, userTokenClient: undefined });
+  return params.run({ client, account, userTokenClient: undefined, userAccessToken: undefined });
 }

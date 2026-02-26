@@ -6,7 +6,9 @@ import {
   normalizeCalendarEvent,
   resolveCalendarTimezone,
   runCalendarApiCall,
+  toCalendarRequestOptions,
   toEpochSeconds,
+  type CalendarCallOptions,
 } from "./common.js";
 import type {
   CalendarCreateEventParams,
@@ -21,11 +23,11 @@ function maybeToEpoch(input: string | undefined, field: string): string | undefi
   return toEpochSeconds(normalized);
 }
 
-async function resolveCalendarId(client: CalendarClient, calendarId?: string): Promise<string> {
+async function resolveCalendarId(client: CalendarClient, calendarId?: string, callOptions?: CalendarCallOptions): Promise<string> {
   if (calendarId?.trim()) return ensureNonEmpty(calendarId, "calendar_id");
 
   const res = await runCalendarApiCall("calendar.v4.calendar.list", () =>
-    (client as any).calendar.v4.calendar.list({ params: { page_size: 1 } }),
+    (client as any).calendar.v4.calendar.list({ params: { page_size: 1 } }, toCalendarRequestOptions(callOptions)),
   );
 
   const item = (res as any)?.data?.items?.[0];
@@ -36,8 +38,8 @@ async function resolveCalendarId(client: CalendarClient, calendarId?: string): P
   return String(resolved);
 }
 
-export async function listCalendarEvents(client: CalendarClient, params: CalendarListEventsParams) {
-  const calendarId = await resolveCalendarId(client, params.calendar_id);
+export async function listCalendarEvents(client: CalendarClient, params: CalendarListEventsParams, callOptions?: CalendarCallOptions) {
+  const calendarId = await resolveCalendarId(client, params.calendar_id, callOptions);
   const startTime = maybeToEpoch(params.start_time, "start_time");
   const endTime = maybeToEpoch(params.end_time, "end_time");
 
@@ -54,7 +56,7 @@ export async function listCalendarEvents(client: CalendarClient, params: Calenda
         page_size: params.page_size,
         page_token: params.page_token,
       },
-    }),
+    }, toCalendarRequestOptions(callOptions)),
   );
 
   return {
@@ -70,7 +72,7 @@ export async function listCalendarEvents(client: CalendarClient, params: Calenda
   };
 }
 
-export async function createCalendarEvent(client: CalendarClient, params: CalendarCreateEventParams) {
+export async function createCalendarEvent(client: CalendarClient, params: CalendarCreateEventParams, callOptions?: CalendarCallOptions) {
   const calendarId = ensureNonEmpty(params.calendar_id, "calendar_id");
   const summary = ensureNonEmpty(params.summary, "summary");
   const startIso = assertIsoDateTime(params.start_time, "start_time");
@@ -107,7 +109,7 @@ export async function createCalendarEvent(client: CalendarClient, params: Calend
           attendee_id_type: attendee.type,
         })),
       },
-    }),
+    }, toCalendarRequestOptions(callOptions)),
   );
 
   return {
@@ -117,7 +119,7 @@ export async function createCalendarEvent(client: CalendarClient, params: Calend
   };
 }
 
-export async function updateCalendarEvent(client: CalendarClient, params: CalendarUpdateEventParams) {
+export async function updateCalendarEvent(client: CalendarClient, params: CalendarUpdateEventParams, callOptions?: CalendarCallOptions) {
   const calendarId = ensureNonEmpty(params.calendar_id, "calendar_id");
   const eventId = ensureNonEmpty(params.event_id, "event_id");
 
@@ -156,7 +158,7 @@ export async function updateCalendarEvent(client: CalendarClient, params: Calend
     (client as any).calendar.v4.calendarEvent.patch({
       path: { calendar_id: calendarId, event_id: eventId },
       data: patchData,
-    }),
+    }, toCalendarRequestOptions(callOptions)),
   );
 
   return {
@@ -167,7 +169,7 @@ export async function updateCalendarEvent(client: CalendarClient, params: Calend
   };
 }
 
-export async function deleteCalendarEvent(client: CalendarClient, params: CalendarDeleteEventParams) {
+export async function deleteCalendarEvent(client: CalendarClient, params: CalendarDeleteEventParams, callOptions?: CalendarCallOptions) {
   const calendarId = ensureNonEmpty(params.calendar_id, "calendar_id");
   const eventId = ensureNonEmpty(params.event_id, "event_id");
 
@@ -178,7 +180,7 @@ export async function deleteCalendarEvent(client: CalendarClient, params: Calend
   await runCalendarApiCall("calendar.v4.calendarEvent.delete", () =>
     (client as any).calendar.v4.calendarEvent.delete({
       path: { calendar_id: calendarId, event_id: eventId },
-    }),
+    }, toCalendarRequestOptions(callOptions)),
   );
 
   return {

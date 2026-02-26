@@ -1,3 +1,4 @@
+import * as Lark from "@larksuiteoapi/node-sdk";
 import { createFeishuClient } from "../client.js";
 import {
   errorResult,
@@ -7,6 +8,15 @@ import {
 } from "../tools-common/feishu-api.js";
 
 export type CalendarClient = ReturnType<typeof createFeishuClient>;
+
+export type CalendarCallOptions = {
+  userAccessToken?: string;
+};
+
+export function toCalendarRequestOptions(options?: CalendarCallOptions): Record<string, unknown> | undefined {
+  if (!options?.userAccessToken) return undefined;
+  return Lark.withUserAccessToken(options.userAccessToken) as unknown as Record<string, unknown>;
+}
 
 export { json, errorResult };
 
