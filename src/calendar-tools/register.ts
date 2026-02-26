@@ -22,7 +22,11 @@ type ToolSpec<P> = {
   run: (client: CalendarClient, params: P) => Promise<unknown>;
 };
 
-function registerCalendarTool<P>(api: OpenClawPluginApi, spec: ToolSpec<P>) {
+type UseUserTokenParams = {
+  useUserToken?: boolean;
+};
+
+function registerCalendarTool<P extends UseUserTokenParams>(api: OpenClawPluginApi, spec: ToolSpec<P>) {
   api.registerTool(
     {
       name: spec.name,
@@ -35,6 +39,7 @@ function registerCalendarTool<P>(api: OpenClawPluginApi, spec: ToolSpec<P>) {
             api,
             toolName: spec.name,
             requiredTool: "calendar",
+            useUserToken: (params as P).useUserToken,
             run: async ({ client }) => json(await spec.run(client as CalendarClient, params as P)),
           });
         } catch (err) {

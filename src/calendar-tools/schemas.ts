@@ -19,6 +19,7 @@ export type CalendarListEventsParams = {
   timezone?: string;
   page_size?: number;
   page_token?: string;
+  useUserToken?: boolean;
 };
 
 export type CalendarCreateEventParams = {
@@ -29,6 +30,7 @@ export type CalendarCreateEventParams = {
   end_time: string;
   timezone?: string;
   attendees?: Array<{ id: string; type?: string }>;
+  useUserToken?: boolean;
 };
 
 export type CalendarUpdateEventParams = {
@@ -39,12 +41,14 @@ export type CalendarUpdateEventParams = {
   start_time?: string;
   end_time?: string;
   timezone?: string;
+  useUserToken?: boolean;
 };
 
 export type CalendarDeleteEventParams = {
   calendar_id: string;
   event_id: string;
   confirm: boolean;
+  useUserToken?: boolean;
 };
 
 export const CalendarListEventsSchema = Type.Object({
@@ -54,6 +58,9 @@ export const CalendarListEventsSchema = Type.Object({
   timezone: TimezoneSchema,
   page_size: Type.Optional(Type.Number({ minimum: 1, maximum: 500 })),
   page_token: Type.Optional(Type.String()),
+  useUserToken: Type.Optional(
+    Type.Boolean({ description: "Use user OAuth token instead of tenant token when available" }),
+  ),
 });
 
 export const CalendarCreateEventSchema = Type.Object({
@@ -72,6 +79,9 @@ export const CalendarCreateEventSchema = Type.Object({
       { description: "Optional attendees" },
     ),
   ),
+  useUserToken: Type.Optional(
+    Type.Boolean({ description: "Use user OAuth token instead of tenant token when available" }),
+  ),
 });
 
 export const CalendarUpdateEventSchema = Type.Object(
@@ -83,6 +93,9 @@ export const CalendarUpdateEventSchema = Type.Object(
     start_time: Type.Optional(CalendarDateTimeSchema),
     end_time: Type.Optional(CalendarDateTimeSchema),
     timezone: TimezoneSchema,
+    useUserToken: Type.Optional(
+      Type.Boolean({ description: "Use user OAuth token instead of tenant token when available" }),
+    ),
   },
   { minProperties: 3 },
 );
@@ -94,4 +107,7 @@ export const CalendarDeleteEventSchema = Type.Object({
     description:
       "Safety confirmation for deletion. Must be true, otherwise the tool rejects delete operation.",
   }),
+  useUserToken: Type.Optional(
+    Type.Boolean({ description: "Use user OAuth token instead of tenant token when available" }),
+  ),
 });
