@@ -244,7 +244,7 @@ async function uploadLocalFile(
         size: stat.size,
         file: stream,
       },
-    }),
+    }) as unknown as Promise<any>,
   );
 
   return {

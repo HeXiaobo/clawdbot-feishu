@@ -131,8 +131,9 @@ export function resolveFeishuAccount(params: {
   };
 
   // Initialize user token cache if userAuth is configured
-  if (merged.userAuth?.enabled && creds) {
-    initUserTokenCache(accountId, merged.userAuth, {
+  const userAuth = (merged as any).userAuth;
+  if (userAuth?.enabled && creds) {
+    initUserTokenCache(accountId, userAuth, {
       appId: creds.appId,
       appSecret: creds.appSecret,
       domain: creds.domain,

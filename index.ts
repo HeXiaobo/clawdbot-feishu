@@ -10,6 +10,8 @@ import { registerFeishuBitableTools } from "./src/bitable-tools/index.js";
 import { registerFeishuSheetTools } from "./src/sheet.js";
 import { registerFeishuTaskTools } from "./src/task-tools/index.js";
 import { registerFeishuCalendarTools } from "./src/calendar-tools/index.js";
+import { registerFeishuSecretsTools } from "./src/secrets-tools/index.js";
+import { registerFeishuChatTools } from "./src/chat-tools/index.js";
 
 export { monitorFeishuProvider } from "./src/monitor.js";
 export {
@@ -63,6 +65,8 @@ const plugin = {
     registerFeishuSheetTools(api);
     registerFeishuTaskTools(api);
     registerFeishuCalendarTools(api);
+    registerFeishuSecretsTools(api);
+    registerFeishuChatTools(api);
   },
 };
 
