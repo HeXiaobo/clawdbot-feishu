@@ -1,58 +1,96 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { ResolvedFeishuAccount } from "../types.js";
 import { hasFeishuToolEnabledForAnyAccount, withFeishuToolClient } from "../tools-common/tool-exec.js";
-import { getChatHistory } from "./actions.js";
-import { ChatHistorySchema, type ChatHistoryParams } from "./schemas.js";
+import { getChatHistory, runChatAction } from "./actions.js";
+import { errorResult, json, type ChatClient } from "./common.js";
+import {
+  ChatHistorySchema,
+  FeishuChatSchema,
+  type ChatHistoryParams,
+  type FeishuChatParams,
+} from "./schemas.js";
 
-function json(data: unknown) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
-    details: data,
-  };
-}
+type ChatToolSpec<P> = {
+  name: string;
+  label: string;
+  description: string;
+  parameters: any;
+  requiredTool?: "chat";
+  run: (args: { client: ChatClient; account: ResolvedFeishuAccount }, params: P) => Promise<unknown>;
+};
 
-function errorResult(err: unknown) {
-  const message = err instanceof Error ? err.message : String(err);
-  return json({ error: message });
-}
-
-export function registerFeishuChatTools(api: OpenClawPluginApi) {
-  if (!api.config || !hasFeishuToolEnabledForAnyAccount(api.config)) {
-    api.logger.debug?.("feishu_chat: Feishu credentials not configured, skipping chat tools");
-    return;
-  }
-
+function registerChatTool<P>(api: OpenClawPluginApi, spec: ChatToolSpec<P>) {
   api.registerTool(
     {
-      name: "feishu_chat_history",
-      label: "Feishu Chat History",
-      description:
-        "Get chat history from a Feishu group chat. Returns message list with sender info, timestamps, and content. Supports time range filtering and pagination.",
-      parameters: ChatHistorySchema,
+      name: spec.name,
+      label: spec.label,
+      description: spec.description,
+      parameters: spec.parameters,
       async execute(_toolCallId, params) {
         try {
           return await withFeishuToolClient({
             api,
-            toolName: "feishu_chat_history",
-            run: async ({ client }) => {
-              const { chat_id, start_time, end_time, page_size, page_token } = params as ChatHistoryParams;
-              const result = await getChatHistory(
-                client,
-                chat_id,
-                start_time,
-                end_time,
-                page_size,
-                page_token
-              );
-              return json(result);
-            },
+            toolName: spec.name,
+            requiredTool: spec.requiredTool,
+            run: async ({ client, account }) =>
+              json(await spec.run({ client: client as ChatClient, account }, params as P)),
           });
         } catch (err) {
           return errorResult(err);
         }
       },
     },
-    { name: "feishu_chat_history" },
+    { name: spec.name },
   );
+}
 
-  api.logger.debug?.("feishu_chat: Registered feishu_chat_history tool");
+export function registerFeishuChatTools(api: OpenClawPluginApi) {
+  if (!api.config) {
+    api.logger.debug?.("feishu_chat: No config available, skipping chat tools");
+    return;
+  }
+
+  if (!hasFeishuToolEnabledForAnyAccount(api.config)) {
+    api.logger.debug?.("feishu_chat: No Feishu accounts configured, skipping chat tools");
+    return;
+  }
+
+  const chatEnabled = hasFeishuToolEnabledForAnyAccount(api.config, "chat");
+  const registered: string[] = [];
+
+  if (chatEnabled) {
+    registerChatTool<FeishuChatParams>(api, {
+      name: "feishu_chat",
+      label: "Feishu Chat",
+      description:
+        "Feishu chat operations. Actions: get_announcement, get_announcement_info, list_announcement_blocks, get_announcement_block, write_announcement, append_announcement, update_announcement_block, create_chat, add_members, check_bot_in_chat, create_session_chat, delete_chat. Use to manage group chats and announcements.",
+      parameters: FeishuChatSchema,
+      requiredTool: "chat",
+      run: async ({ client }, params) => runChatAction(client, params),
+    });
+    registered.push("feishu_chat");
+
+    registerChatTool<ChatHistoryParams>(api, {
+      name: "feishu_chat_history",
+      label: "Feishu Chat History",
+      description:
+        "Get chat history from a Feishu group chat. Returns message list with sender info, timestamps, and content. Supports time range filtering and pagination.",
+      parameters: ChatHistorySchema,
+      requiredTool: "chat",
+      run: async ({ client }, params) =>
+        getChatHistory(
+          client,
+          params.chat_id,
+          params.start_time,
+          params.end_time,
+          params.page_size,
+          params.page_token,
+        ),
+    });
+    registered.push("feishu_chat_history");
+  }
+
+  if (registered.length > 0) {
+    api.logger.debug?.(`feishu_chat: Registered ${registered.join(", ")}`);
+  }
 }

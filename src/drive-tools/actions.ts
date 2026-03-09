@@ -8,9 +8,38 @@ import path from "path";
 type DriveMoveType = "doc" | "docx" | "sheet" | "bitable" | "folder" | "file" | "mindnote" | "slides";
 type DriveDeleteType = DriveMoveType | "shortcut";
 
+function requireString(value: unknown, field: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`${field} is required`);
+  }
+  return value;
+}
+
+async function getFileType(client: DriveClient, fileToken: string): Promise<string> {
+  let pageToken: string | undefined;
+
+  do {
+    const listRes = await runDriveApiCall("drive.file.list", () =>
+      client.drive.file.list({
+        params: pageToken ? { page_token: pageToken } : {},
+      }),
+    );
+
+    const file = listRes.data?.files?.find((f: any) => f.token === fileToken);
+    if (file) {
+      if (!file.type) {
+        throw new Error(`File found but no type for ${fileToken}. Please provide the 'type' parameter explicitly.`);
+      }
+      return file.type;
+    }
+
+    pageToken = listRes.data?.next_page_token;
+  } while (pageToken);
+
+  throw new Error(`File not found: ${fileToken}. Please provide the 'type' parameter explicitly.`);
+}
+
 async function getRootFolderToken(client: DriveClient): Promise<string> {
-  // Use generic HTTP client to call the root folder meta API
-  // as it's not directly exposed in the SDK.
   const domain = (client as any).domain ?? "https://open.feishu.cn";
   const res = await runDriveApiCall("drive.explorer.v2.root_folder.meta", () =>
     (client as any).httpInstance.get(`${domain}/open-apis/drive/explorer/v2/root_folder/meta`) as Promise<{
@@ -25,7 +54,6 @@ async function getRootFolderToken(client: DriveClient): Promise<string> {
 }
 
 async function listFolder(client: DriveClient, folderToken?: string) {
-  // Filter out invalid folder_token values (empty, "0", etc.)
   const validFolderToken = folderToken && folderToken !== "0" ? folderToken : undefined;
   const res = await runDriveApiCall("drive.file.list", () =>
     client.drive.file.list({
@@ -49,33 +77,35 @@ async function listFolder(client: DriveClient, folderToken?: string) {
 }
 
 async function getFileInfo(client: DriveClient, fileToken: string, folderToken?: string) {
-  // Use list with folder_token to find file info.
-  const res = await runDriveApiCall("drive.file.list", () =>
-    client.drive.file.list({
-      params: folderToken ? { folder_token: folderToken } : {},
-    }),
-  );
+  let pageToken: string | undefined;
 
-  const file = res.data?.files?.find((f) => f.token === fileToken);
-  if (!file) {
-    throw new Error(`File not found: ${fileToken}`);
-  }
+  do {
+    const res = await runDriveApiCall("drive.file.list", () =>
+      client.drive.file.list({
+        params: folderToken ? { folder_token: folderToken, page_token: pageToken } : { page_token: pageToken },
+      }),
+    );
 
-  return {
-    token: file.token,
-    name: file.name,
-    type: file.type,
-    url: file.url,
-    created_time: file.created_time,
-    modified_time: file.modified_time,
-    owner_id: file.owner_id,
-  };
+    const file = res.data?.files?.find((f: any) => f.token === fileToken);
+    if (file) {
+      return {
+        token: file.token,
+        name: file.name,
+        type: file.type,
+        url: file.url,
+        created_time: file.created_time,
+        modified_time: file.modified_time,
+        owner_id: file.owner_id,
+      };
+    }
+
+    pageToken = res.data?.next_page_token;
+  } while (pageToken);
+
+  throw new Error(`File not found: ${fileToken}`);
 }
 
 async function createFolder(client: DriveClient, name: string, folderToken?: string) {
-  // Feishu supports using folder_token="0" as the root folder.
-  // We try to resolve the real root token (explorer API), but fall back to "0"
-  // because some tenants/apps return 400 for that explorer endpoint.
   let effectiveToken = folderToken && folderToken !== "0" ? folderToken : "0";
   if (effectiveToken === "0") {
     try {
@@ -100,12 +130,7 @@ async function createFolder(client: DriveClient, name: string, folderToken?: str
   };
 }
 
-async function moveFile(
-  client: DriveClient,
-  fileToken: string,
-  type: string,
-  folderToken: string,
-) {
+async function moveFile(client: DriveClient, fileToken: string, type: string, folderToken: string) {
   const res = await runDriveApiCall("drive.file.move", () =>
     client.drive.file.move({
       path: { file_token: fileToken },
@@ -122,12 +147,18 @@ async function moveFile(
   };
 }
 
-async function deleteFile(client: DriveClient, fileToken: string, type: string) {
+async function deleteFile(client: DriveClient, fileToken: string, type?: string) {
+  let effectiveType = type;
+
+  if (!effectiveType) {
+    effectiveType = await getFileType(client, fileToken);
+  }
+
   const res = await runDriveApiCall("drive.file.delete", () =>
     client.drive.file.delete({
       path: { file_token: fileToken },
       params: {
-        type: type as DriveDeleteType,
+        type: effectiveType as DriveDeleteType,
       },
     }),
   );
@@ -135,6 +166,7 @@ async function deleteFile(client: DriveClient, fileToken: string, type: string) 
   return {
     success: true,
     task_id: res.data?.task_id,
+    type_used: effectiveType,
   };
 }
 
@@ -145,15 +177,21 @@ function sanitizeFileName(name: string): string {
 async function downloadDriveResource(
   client: DriveClient,
   fileToken: string,
-  saveTo?: string,
-  preferMedia?: boolean,
+  options: {
+    saveTo?: string;
+    fileName?: string;
+    preferMedia?: boolean;
+  } = {},
 ) {
-  const outputPath = saveTo ? path.resolve(saveTo) : path.join(os.tmpdir(), "feishu-downloads", fileToken);
+  const downloadRoot = path.join(os.tmpdir(), "feishu-downloads");
+  const outputPath = options.saveTo
+    ? path.resolve(options.saveTo)
+    : path.join(downloadRoot, options.fileName ? sanitizeFileName(options.fileName) : fileToken);
+
   await fs.promises.mkdir(path.dirname(outputPath), { recursive: true });
 
   const errors: Array<{ api: "file.download" | "media.download"; error: string }> = [];
-  const useMediaFirst = Boolean(preferMedia);
-  const apis: Array<"file" | "media"> = useMediaFirst ? ["media", "file"] : ["file", "media"];
+  const apis: Array<"file" | "media"> = options.preferMedia ? ["media", "file"] : ["file", "media"];
 
   for (const apiType of apis) {
     try {
@@ -163,26 +201,35 @@ async function downloadDriveResource(
           : await client.drive.media.download({ path: { file_token: fileToken } });
 
       await response.writeFile(outputPath);
-      const stats = await fs.promises.stat(outputPath);
-      const headerName = String(response.headers?.["content-disposition"] ?? "");
-      const matched = /filename\*?=(?:UTF-8''|"?)([^";]+)/i.exec(headerName);
-      const remoteName = matched?.[1] ? decodeURIComponent(matched[1].replace(/"/g, "")) : undefined;
-      const finalPath = saveTo || !remoteName ? outputPath : path.join(path.dirname(outputPath), sanitizeFileName(remoteName));
 
-      if (finalPath !== outputPath) {
-        await fs.promises.rename(outputPath, finalPath);
+      let finalPath = outputPath;
+      if (!options.saveTo && !options.fileName) {
+        const headerName = String((response as any).headers?.["content-disposition"] ?? "");
+        const matched = /filename\*?=(?:UTF-8''|"?)([^";]+)/i.exec(headerName);
+        const remoteName = matched?.[1] ? decodeURIComponent(matched[1].replace(/"/g, "")) : undefined;
+        if (remoteName) {
+          const candidatePath = path.join(path.dirname(outputPath), sanitizeFileName(remoteName));
+          if (candidatePath !== outputPath) {
+            await fs.promises.rename(outputPath, candidatePath);
+            finalPath = candidatePath;
+          }
+        }
       }
 
+      const stats = await fs.promises.stat(finalPath);
       return {
         success: true,
         file_token: fileToken,
         saved_to: finalPath,
         bytes: stats.size,
         api_used: apiType === "file" ? "drive.file.download" : "drive.media.download",
-        fallback_used: apiType === apis[0] ? false : true,
+        fallback_used: apiType !== apis[0],
       };
     } catch (err) {
-      errors.push({ api: apiType === "file" ? "file.download" : "media.download", error: String(err) });
+      errors.push({
+        api: apiType === "file" ? "file.download" : "media.download",
+        error: String(err),
+      });
     }
   }
 
@@ -191,11 +238,6 @@ async function downloadDriveResource(
   throw new Error(`Drive download failed for token ${fileToken}. ${hint} Attempts: ${errors.map((e) => `${e.api}: ${e.error}`).join(" | ")}`);
 }
 
-/**
- * Import markdown content as a new Feishu document.
- * Uses create + write approach for reliable content import.
- * Note: docType parameter is accepted for API compatibility but docx is always used.
- */
 async function importDocument(
   client: DriveClient,
   title: string,
@@ -226,7 +268,6 @@ async function uploadLocalFile(
     );
   }
 
-  // Feishu upload_all hard limit is 20MB.
   const hardLimit = 20 * 1024 * 1024;
   if (stat.size > hardLimit) {
     throw new Error(`File too large for drive uploadAll: ${Math.ceil(stat.size / (1024 * 1024))}MB > 20MB`);
@@ -265,27 +306,42 @@ export async function runDriveAction(
     case "list":
       return listFolder(client, params.folder_token);
     case "info":
-      return getFileInfo(client, params.file_token);
+      return getFileInfo(client, requireString(params.file_token, "file_token"));
     case "create_folder":
-      return createFolder(client, params.name, params.folder_token);
+      return createFolder(client, requireString(params.name, "name"), params.folder_token);
     case "move":
-      return moveFile(client, params.file_token, params.type, params.folder_token);
+      return moveFile(
+        client,
+        requireString(params.file_token, "file_token"),
+        requireString(params.type, "type"),
+        requireString(params.folder_token, "folder_token"),
+      );
     case "delete":
-      return deleteFile(client, params.file_token, params.type);
+      return deleteFile(client, requireString(params.file_token, "file_token"), params.type);
     case "download":
-      return downloadDriveResource(client, params.file_token, params.save_to, params.prefer_media);
+      return downloadDriveResource(client, requireString(params.file_token, "file_token"), {
+        saveTo: params.save_to,
+        fileName: params.file_name,
+        preferMedia: params.prefer_media,
+      });
     case "upload": {
-      const localPath = (params as any).path || (params as any).file_path;
+      const localPath = params.path || params.file_path;
       if (!localPath || typeof localPath !== "string") {
         throw new Error("upload requires `path` (or `file_path`) to a local file");
       }
-      return uploadLocalFile(client, params.folder_token, localPath, (params as any).name, mediaMaxBytes);
+      return uploadLocalFile(
+        client,
+        requireString(params.folder_token, "folder_token"),
+        localPath,
+        params.file_name ?? params.name,
+        mediaMaxBytes,
+      );
     }
     case "import_document":
       return importDocument(
         client,
-        params.title,
-        params.content,
+        requireString(params.title, "title"),
+        requireString(params.content, "content"),
         mediaMaxBytes,
         params.folder_token,
         params.doc_type || "docx",

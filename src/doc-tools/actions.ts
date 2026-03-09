@@ -1,5 +1,5 @@
 import { appendDoc, createAndWriteDoc, createDoc, writeDoc } from "../doc-write-service.js";
-import { runDocApiCall, type DocClient } from "./common.js";
+import { detectDocFormat, runDocApiCall, type DocClient } from "./common.js";
 import type { FeishuDocParams } from "./schemas.js";
 
 const BLOCK_TYPE_NAMES: Record<number, string> = {
@@ -44,11 +44,45 @@ function normalizePageSize(pageSize?: number) {
   return pageSize;
 }
 
+function requireString(value: unknown, field: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`${field} is required`);
+  }
+  return value;
+}
+
 function omitUndefined<T extends Record<string, unknown>>(obj: T): T {
   return Object.fromEntries(Object.entries(obj).filter(([, value]) => value !== undefined)) as T;
 }
 
+async function readLegacyDoc(client: DocClient, docToken: string) {
+  const domain = (client as any).domain ?? "https://open.feishu.cn";
+  const token = await client.tokenManager.getTenantAccessToken();
+  const response = await runDocApiCall("doc.v2.rawContent", () =>
+    client.httpInstance.get<{ code?: number; msg?: string; data?: { content?: string } }>(
+      `${domain}/open-apis/doc/v2/${docToken}/raw_content`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      },
+    ),
+  );
+
+  return {
+    content: response.data?.content,
+    format: "doc" as const,
+    hint: "Legacy document format. Only plain text content available. Title not included in this API response.",
+  };
+}
+
 async function readDoc(client: DocClient, docToken: string) {
+  const format = detectDocFormat(docToken);
+
+  if (format === "doc") {
+    return readLegacyDoc(client, docToken);
+  }
+
   const [contentRes, infoRes, blocksRes] = await Promise.all([
     runDocApiCall("docx.document.rawContent", () =>
       client.docx.document.rawContent({ path: { document_id: docToken } }),
@@ -292,39 +326,81 @@ export async function runDocAction(
 ) {
   switch (params.action) {
     case "read":
-      return readDoc(client, params.doc_token);
+      return readDoc(client, requireString(params.doc_token, "doc_token"));
     case "write":
-      return writeDoc(client, params.doc_token, params.content, mediaMaxBytes);
+      return writeDoc(
+        client,
+        requireString(params.doc_token, "doc_token"),
+        requireString(params.content, "content"),
+        mediaMaxBytes,
+      );
     case "append":
-      return appendDoc(client, params.doc_token, params.content, mediaMaxBytes);
+      return appendDoc(
+        client,
+        requireString(params.doc_token, "doc_token"),
+        requireString(params.content, "content"),
+        mediaMaxBytes,
+      );
     case "create":
-      return createDoc(client, params.title, params.folder_token);
+      return createDoc(client, requireString(params.title, "title"), params.folder_token);
     case "create_and_write":
       return createAndWriteDoc(
         client,
-        params.title,
-        params.content,
+        requireString(params.title, "title"),
+        requireString(params.content, "content"),
         mediaMaxBytes,
         params.folder_token,
       );
     case "list_blocks":
-      return listBlocks(client, params.doc_token);
+      return listBlocks(client, requireString(params.doc_token, "doc_token"));
     case "get_block":
-      return getBlock(client, params.doc_token, params.block_id);
+      return getBlock(
+        client,
+        requireString(params.doc_token, "doc_token"),
+        requireString(params.block_id, "block_id"),
+      );
     case "update_block":
-      return updateBlock(client, params.doc_token, params.block_id, params.content);
+      return updateBlock(
+        client,
+        requireString(params.doc_token, "doc_token"),
+        requireString(params.block_id, "block_id"),
+        requireString(params.content, "content"),
+      );
     case "delete_block":
-      return deleteBlock(client, params.doc_token, params.block_id);
+      return deleteBlock(
+        client,
+        requireString(params.doc_token, "doc_token"),
+        requireString(params.block_id, "block_id"),
+      );
     case "list_comments":
-      return listComments(client, params.doc_token, params.page_token, params.page_size);
+      return listComments(
+        client,
+        requireString(params.doc_token, "doc_token"),
+        params.page_token,
+        params.page_size,
+      );
     case "create_comment":
-      return createComment(client, params.doc_token, params.content);
+      return createComment(
+        client,
+        requireString(params.doc_token, "doc_token"),
+        requireString(params.content, "content"),
+      );
     case "get_comment":
-      return getComment(client, params.doc_token, params.comment_id);
+      return getComment(
+        client,
+        requireString(params.doc_token, "doc_token"),
+        requireString(params.comment_id, "comment_id"),
+      );
     case "list_comment_replies":
-      return listCommentReplies(client, params.doc_token, params.comment_id, params.page_token, params.page_size);
+      return listCommentReplies(
+        client,
+        requireString(params.doc_token, "doc_token"),
+        requireString(params.comment_id, "comment_id"),
+        params.page_token,
+        params.page_size,
+      );
     case "delete":
-      return deleteDocument(client, params.doc_token);
+      return deleteDocument(client, requireString(params.doc_token, "doc_token"));
     default:
       return { error: `Unknown action: ${(params as any).action}` };
   }
