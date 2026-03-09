@@ -402,6 +402,63 @@ async function deleteChat(client: ChatClient, chatId: string) {
   };
 }
 
+export async function getChatHistory(
+  client: ChatClient,
+  chatId: string,
+  startTime?: string,
+  endTime?: string,
+  pageSize?: number,
+  pageToken?: string,
+) {
+  const params: {
+    container_id_type: string;
+    container_id: string;
+    start_time?: string;
+    end_time?: string;
+    page_size?: number;
+    page_token?: string;
+  } = {
+    container_id_type: "chat",
+    container_id: chatId,
+  };
+
+  if (startTime) params.start_time = startTime;
+  if (endTime) params.end_time = endTime;
+  if (pageSize) params.page_size = pageSize;
+  if (pageToken) params.page_token = pageToken;
+
+  const response = await runChatApiCall("im.message.list", () =>
+    (client as any).im.message.list({ params }),
+  );
+
+  const items = (response as any).data?.items ?? [];
+  return {
+    messages: items.map((item: any) => ({
+      message_id: item.message_id || "",
+      sender: {
+        id: item.sender?.id || "",
+        id_type: item.sender?.id_type || "",
+        sender_type: item.sender?.sender_type || "",
+        tenant_key: item.sender?.tenant_key,
+      },
+      create_time: item.create_time || "",
+      update_time: item.update_time || "",
+      chat_id: item.chat_id || "",
+      msg_type: item.msg_type || "",
+      content: item.body?.content || "",
+      mentions: item.mentions?.map((m: any) => ({
+        key: m.key || "",
+        id: m.id?.open_id || m.id?.user_id || "",
+        id_type: m.id?.id_type || "",
+        name: m.name || "",
+        tenant_key: m.tenant_key,
+      })),
+    })),
+    has_more: Boolean((response as any).data?.has_more),
+    page_token: (response as any).data?.page_token,
+  };
+}
+
 // Main action handler - MUST BE EXPORTED
 export async function runChatAction(client: ChatClient, params: FeishuChatParams) {
   switch (params.action) {

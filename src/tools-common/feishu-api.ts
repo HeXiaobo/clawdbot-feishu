@@ -15,6 +15,18 @@ type FeishuErrorInfo = {
   logId?: string;
 };
 
+type FeishuTaggedError = Error & {
+  code?: number;
+  msg?: string;
+  log_id?: string;
+  logId?: string;
+  feishu_error?: {
+    code?: number;
+    msg?: string;
+    log_id?: string;
+  };
+};
+
 type RunFeishuApiCallOptions = {
   /** Feishu error codes that should be treated as transient and retried. */
   retryableCodes?: Iterable<number>;
@@ -36,7 +48,21 @@ export function json(data: unknown) {
 
 /** Convert any thrown value into the standard JSON error envelope. */
 export function errorResult(err: unknown) {
-  return json({ error: err instanceof Error ? err.message : String(err) });
+  const message = err instanceof Error ? err.message : String(err);
+  const info = extractFeishuErrorInfo(err);
+
+  if (!info) {
+    return json({ error: message });
+  }
+
+  return json({
+    error: message,
+    feishu_error: {
+      code: info.code,
+      msg: info.msg,
+      log_id: info.logId,
+    },
+  });
 }
 
 /** Small async sleep utility used by retry backoff. */
@@ -80,8 +106,40 @@ function extractFeishuErrorInfo(err: unknown): FeishuErrorInfo | null {
     };
   }
 
-  const responseData = (obj.response as { data?: unknown } | undefined)?.data;
-  if (responseData) return extractFeishuErrorInfo(responseData);
+  const response = obj.response as
+    | {
+        data?: unknown;
+        status?: unknown;
+        headers?: Record<string, unknown>;
+      }
+    | undefined;
+
+  const responseData = response?.data;
+  if (responseData) {
+    const nested = extractFeishuErrorInfo(responseData);
+    if (nested) {
+      const headerLogId =
+        (response?.headers?.["x-tt-logid"] as string | undefined) ??
+        (response?.headers?.["x-log-id"] as string | undefined);
+      if (!nested.logId && headerLogId) {
+        nested.logId = headerLogId;
+      }
+      return nested;
+    }
+  }
+
+  const status = typeof response?.status === "number" ? response.status : undefined;
+  const headerLogId =
+    (response?.headers?.["x-tt-logid"] as string | undefined) ??
+    (response?.headers?.["x-log-id"] as string | undefined);
+
+  if (status !== undefined || headerLogId) {
+    return {
+      code: status,
+      msg: typeof msgValue === "string" ? (msgValue as string) : undefined,
+      logId: headerLogId,
+    };
+  }
 
   return null;
 }
@@ -95,12 +153,20 @@ function assertFeishuOk<T extends FeishuApiResponse>(response: T, context: strin
     detail
       ? `${context} failed: ${message}, code=${response.code}, log_id=${detail}`
       : `${context} failed: ${message}, code=${response.code}`,
-  ) as Error & { code?: number; log_id?: string; logId?: string };
+  ) as FeishuTaggedError;
+
   error.code = response.code;
+  error.msg = response.msg;
   if (detail) {
     error.log_id = detail;
     error.logId = detail;
   }
+  error.feishu_error = {
+    code: response.code,
+    msg: response.msg,
+    log_id: detail,
+  };
+
   throw error;
 }
 
@@ -109,6 +175,22 @@ function assertFeishuOk<T extends FeishuApiResponse>(response: T, context: strin
  * Preserves Feishu `code/log_id` details when available.
  */
 function toError(err: unknown, context: string): Error {
+  const attachFeishuInfo = (error: Error, info: FeishuErrorInfo): Error => {
+    const tagged = error as FeishuTaggedError;
+    tagged.code = info.code;
+    tagged.msg = info.msg;
+    if (info.logId) {
+      tagged.log_id = info.logId;
+      tagged.logId = info.logId;
+    }
+    tagged.feishu_error = {
+      code: info.code,
+      msg: info.msg,
+      log_id: info.logId,
+    };
+    return tagged;
+  };
+
   if (err instanceof Error) {
     const info = extractFeishuErrorInfo(err);
     if (!info) return err;
@@ -119,7 +201,7 @@ function toError(err: unknown, context: string): Error {
     ]
       .filter(Boolean)
       .join(", ");
-    return new Error(`${context} failed: ${details}`);
+    return attachFeishuInfo(new Error(`${context} failed: ${details}`), info);
   }
 
   const info = extractFeishuErrorInfo(err);
@@ -131,7 +213,7 @@ function toError(err: unknown, context: string): Error {
     ]
       .filter(Boolean)
       .join(", ");
-    return new Error(`${context} failed: ${details}`);
+    return attachFeishuInfo(new Error(`${context} failed: ${details}`), info);
   }
 
   return new Error(`${context} failed: ${String(err)}`);

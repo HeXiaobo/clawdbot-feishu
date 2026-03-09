@@ -77,6 +77,18 @@ export type FeishuToolsConfig = {
   chat?: boolean;
   /** Enable the feishu_urgent tool (buzz/urgent notifications). Enabled by default. */
   urgent?: boolean;
+  calendar?: boolean;
+};
+
+/**
+ * User OAuth authentication configuration for reading external tenant docs
+ */
+export type FeishuUserAuth = {
+  enabled: boolean;
+  accessToken?: string;
+  refreshToken?: string;
+  openId?: string;
+  expiresAt?: string; // ISO 8601 timestamp
 };
 
 export type DynamicAgentCreationConfig = {

@@ -1,2 +1,7 @@
 export { registerFeishuChatTools } from "./register.js";
-export { FeishuChatSchema, type FeishuChatParams } from "./schemas.js";
+export {
+  FeishuChatSchema,
+  ChatHistorySchema,
+  type FeishuChatParams,
+  type ChatHistoryParams,
+} from "./schemas.js";

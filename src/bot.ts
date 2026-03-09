@@ -1552,7 +1552,6 @@ export async function handleFeishuMessage(params: {
     const systemEventText = permissionErrorForAgent
       ? inboundLabel
       : `${inboundLabel}: ${preview}`;
-
     core.system.enqueueSystemEvent(systemEventText, {
       sessionKey: route.sessionKey,
       contextKey: `feishu:message:${ctx.chatId}:${ctx.messageId}`,

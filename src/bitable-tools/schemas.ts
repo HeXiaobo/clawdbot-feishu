@@ -46,6 +46,7 @@ export type ListRecordsParams = {
   table_id: string;
   page_size?: number;
   page_token?: string;
+  view_id?: string;
 };
 
 export type GetRecordParams = {
@@ -168,6 +169,7 @@ export const ListRecordsSchema = Type.Object({
     }),
   ),
   page_token: Type.Optional(Type.String({ description: "Pagination token from previous response" })),
+  view_id: Type.Optional(Type.String({ description: "Optional view ID to filter records by specific view" })),
 });
 
 export const GetRecordSchema = Type.Object({

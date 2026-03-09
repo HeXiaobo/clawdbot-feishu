@@ -1,9 +1,14 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import type { ResolvedFeishuAccount } from "../types.js";
 import { hasFeishuToolEnabledForAnyAccount, withFeishuToolClient } from "../tools-common/tool-exec.js";
-import { runChatAction } from "./actions.js";
+import { getChatHistory, runChatAction } from "./actions.js";
 import { errorResult, json, type ChatClient } from "./common.js";
-import { FeishuChatSchema, type FeishuChatParams } from "./schemas.js";
+import {
+  ChatHistorySchema,
+  FeishuChatSchema,
+  type ChatHistoryParams,
+  type FeishuChatParams,
+} from "./schemas.js";
 
 type ChatToolSpec<P> = {
   name: string;
@@ -64,6 +69,25 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
       run: async ({ client }, params) => runChatAction(client, params),
     });
     registered.push("feishu_chat");
+
+    registerChatTool<ChatHistoryParams>(api, {
+      name: "feishu_chat_history",
+      label: "Feishu Chat History",
+      description:
+        "Get chat history from a Feishu group chat. Returns message list with sender info, timestamps, and content. Supports time range filtering and pagination.",
+      parameters: ChatHistorySchema,
+      requiredTool: "chat",
+      run: async ({ client }, params) =>
+        getChatHistory(
+          client,
+          params.chat_id,
+          params.start_time,
+          params.end_time,
+          params.page_size,
+          params.page_token,
+        ),
+    });
+    registered.push("feishu_chat_history");
   }
 
   if (registered.length > 0) {

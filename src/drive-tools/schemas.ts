@@ -27,6 +27,7 @@ const DRIVE_ACTION_VALUES = [
   "move",
   "delete",
   "download",
+  "upload",
   "import_document",
 ] as const;
 
@@ -37,14 +38,16 @@ export const FeishuDriveSchema = Type.Object({
   ),
   file_token: Type.Optional(Type.String({ description: "File or folder token" })),
   type: Type.Optional(stringEnum(FILE_TYPE_VALUES, { description: "File type" })),
-  name: Type.Optional(Type.String({ description: "Folder name (for create_folder)" })),
+  name: Type.Optional(Type.String({ description: "Folder name (for create_folder or upload override)" })),
   title: Type.Optional(Type.String({ description: "Document title (for import_document)" })),
-  save_to: Type.Optional(Type.String({ description: "Optional absolute or relative output path" })),
+  path: Type.Optional(Type.String({ description: "Local file path to upload" })),
+  file_path: Type.Optional(Type.String({ description: "Alias of path for upload" })),
   file_name: Type.Optional(
     Type.String({
-      description: "Optional output file name alias when save_to is omitted",
+      description: "Optional output file name alias when save_to is omitted, or upload name override",
     }),
   ),
+  save_to: Type.Optional(Type.String({ description: "Optional absolute or relative output path" })),
   prefer_media: Type.Optional(
     Type.Boolean({ description: "Prefer drive.media.download first for media-backed resources" }),
   ),

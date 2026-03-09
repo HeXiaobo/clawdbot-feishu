@@ -107,8 +107,8 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     label: "Feishu Bitable List Records",
     description: "List records (rows) from a Bitable table with pagination support",
     parameters: ListRecordsSchema,
-    run: (client, { app_token, table_id, page_size, page_token }) =>
-      listRecords(client, app_token, table_id, page_size, page_token),
+    run: (client, { app_token, table_id, page_size, page_token, view_id }) =>
+      listRecords(client, app_token, table_id, page_size, page_token, view_id),
   });
 
   registerBitableTool<CreateFieldParams>(api, {

@@ -479,6 +479,8 @@ session:
 - **Task tools**: Create, get details, update, and delete tasks via Feishu Task v2 API
 - **Chat tools**: Read and write group announcements, create group chats, add members, check bot membership, delete chats (`feishu_chat`)
 - **Urgent notification tools**: Send buzz/urgent notifications (app, SMS, voice call) via `feishu_urgent`
+- **Calendar tools**: List, create, update, and delete calendar events
+- **Secrets management**: Securely store and manage sensitive credentials (API keys, tokens, etc.) with `feishu_secrets` tool. Supports CRUD operations, automatic file permission (600), and SecretRef format for safe configuration references. See [Secrets Documentation](./docs/secrets-usage.md) for details.
 - **@mention forwarding**: When you @mention someone in your message, the bot's reply will automatically @mention them too
 - **Permission error notification**: When the bot encounters a Feishu API permission error, it automatically notifies the user with the permission grant URL
 - **Dynamic agent creation**: Each DM user can have their own isolated agent instance with dedicated workspace (optional)

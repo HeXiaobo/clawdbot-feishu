@@ -17,7 +17,7 @@ function requireString(value: unknown, field: string): string {
 
 async function getFileType(client: DriveClient, fileToken: string): Promise<string> {
   let pageToken: string | undefined;
-  
+
   do {
     const listRes = await runDriveApiCall("drive.file.list", () =>
       client.drive.file.list({
@@ -32,7 +32,7 @@ async function getFileType(client: DriveClient, fileToken: string): Promise<stri
       }
       return file.type;
     }
-    
+
     pageToken = listRes.data?.next_page_token;
   } while (pageToken);
 
@@ -40,8 +40,6 @@ async function getFileType(client: DriveClient, fileToken: string): Promise<stri
 }
 
 async function getRootFolderToken(client: DriveClient): Promise<string> {
-  // Use generic HTTP client to call the root folder meta API
-  // as it's not directly exposed in the SDK.
   const domain = (client as any).domain ?? "https://open.feishu.cn";
   const res = await runDriveApiCall("drive.explorer.v2.root_folder.meta", () =>
     (client as any).httpInstance.get(`${domain}/open-apis/drive/explorer/v2/root_folder/meta`) as Promise<{
@@ -56,7 +54,6 @@ async function getRootFolderToken(client: DriveClient): Promise<string> {
 }
 
 async function listFolder(client: DriveClient, folderToken?: string) {
-  // Filter out invalid folder_token values (empty, "0", etc.)
   const validFolderToken = folderToken && folderToken !== "0" ? folderToken : undefined;
   const res = await runDriveApiCall("drive.file.list", () =>
     client.drive.file.list({
@@ -109,9 +106,6 @@ async function getFileInfo(client: DriveClient, fileToken: string, folderToken?:
 }
 
 async function createFolder(client: DriveClient, name: string, folderToken?: string) {
-  // Feishu supports using folder_token="0" as the root folder.
-  // We try to resolve the real root token (explorer API), but fall back to "0"
-  // because some tenants/apps return 400 for that explorer endpoint.
   let effectiveToken = folderToken && folderToken !== "0" ? folderToken : "0";
   if (effectiveToken === "0") {
     try {
@@ -136,12 +130,7 @@ async function createFolder(client: DriveClient, name: string, folderToken?: str
   };
 }
 
-async function moveFile(
-  client: DriveClient,
-  fileToken: string,
-  type: string,
-  folderToken: string,
-) {
+async function moveFile(client: DriveClient, fileToken: string, type: string, folderToken: string) {
   const res = await runDriveApiCall("drive.file.move", () =>
     client.drive.file.move({
       path: { file_token: fileToken },
@@ -244,16 +233,11 @@ async function downloadDriveResource(
     }
   }
 
-  throw new Error(
-    `Drive download failed for token ${fileToken}. Attempts: ${errors.map((e) => `${e.api}: ${e.error}`).join(" | ")}`,
-  );
+  const hint =
+    "Token 可能不是可下载的云盘文件，或应用无权限。可尝试传 prefer_media=true（优先走素材下载）或确认该 token 已分享给应用。";
+  throw new Error(`Drive download failed for token ${fileToken}. ${hint} Attempts: ${errors.map((e) => `${e.api}: ${e.error}`).join(" | ")}`);
 }
 
-/**
- * Import markdown content as a new Feishu document.
- * Uses create + write approach for reliable content import.
- * Note: docType parameter is accepted for API compatibility but docx is always used.
- */
 async function importDocument(
   client: DriveClient,
   title: string,
@@ -263,6 +247,54 @@ async function importDocument(
   _docType?: "docx" | "doc",
 ) {
   return createAndWriteDoc(client, title, content, mediaMaxBytes, folderToken);
+}
+
+async function uploadLocalFile(
+  client: DriveClient,
+  folderToken: string,
+  inputPath: string,
+  name?: string,
+  mediaMaxBytes?: number,
+) {
+  const resolved = path.resolve(inputPath);
+  const stat = await fs.promises.stat(resolved).catch(() => null);
+  if (!stat || !stat.isFile()) {
+    throw new Error(`Local file not found: ${resolved}`);
+  }
+
+  if (mediaMaxBytes && stat.size > mediaMaxBytes) {
+    throw new Error(
+      `File too large: ${Math.ceil(stat.size / (1024 * 1024))}MB > ${Math.ceil(mediaMaxBytes / (1024 * 1024))}MB (drive uploadAll limit is 20MB)`,
+    );
+  }
+
+  const hardLimit = 20 * 1024 * 1024;
+  if (stat.size > hardLimit) {
+    throw new Error(`File too large for drive uploadAll: ${Math.ceil(stat.size / (1024 * 1024))}MB > 20MB`);
+  }
+
+  const fileName = (name?.trim() || path.basename(resolved) || "upload.bin").trim();
+  const stream = fs.createReadStream(resolved);
+
+  const res = await runDriveApiCall("drive.file.uploadAll", () =>
+    client.drive.file.uploadAll({
+      data: {
+        file_name: fileName,
+        parent_type: "explorer",
+        parent_node: folderToken,
+        size: stat.size,
+        file: stream,
+      },
+    }) as unknown as Promise<any>,
+  );
+
+  return {
+    success: true,
+    file_token: (res as any)?.file_token,
+    name: fileName,
+    size: stat.size,
+    folder_token: folderToken,
+  };
 }
 
 export async function runDriveAction(
@@ -292,6 +324,19 @@ export async function runDriveAction(
         fileName: params.file_name,
         preferMedia: params.prefer_media,
       });
+    case "upload": {
+      const localPath = params.path || params.file_path;
+      if (!localPath || typeof localPath !== "string") {
+        throw new Error("upload requires `path` (or `file_path`) to a local file");
+      }
+      return uploadLocalFile(
+        client,
+        requireString(params.folder_token, "folder_token"),
+        localPath,
+        params.file_name ?? params.name,
+        mediaMaxBytes,
+      );
+    }
     case "import_document":
       return importDocument(
         client,

@@ -81,6 +81,7 @@ const DynamicAgentCreationSchema = z
  * - perm can work independently but is typically used with drive
  * - task can work independently
  * - sheet can work independently
+ * - calendar can work independently
  */
 const FeishuToolsConfigSchema = z
   .object({
@@ -93,6 +94,7 @@ const FeishuToolsConfigSchema = z
     task: z.boolean().optional(), // Task operations (default: true)
     chat: z.boolean().optional(), // Chat management operations (default: true)
     urgent: z.boolean().optional(), // Buzz/urgent notifications (default: true)
+    calendar: z.boolean().optional(), // Calendar operations (default: true)
   })
   .strict()
   .optional();
@@ -120,6 +122,17 @@ export const FeishuGroupSchema = z
     topicSessionMode: TopicSessionModeSchema,
   })
   .strict();
+
+const FeishuUserAuthSchema = z
+  .object({
+    enabled: z.boolean().optional().default(false),
+    accessToken: z.string().optional(),
+    refreshToken: z.string().optional(),
+    openId: z.string().optional(),
+    expiresAt: z.string().datetime().optional(),
+  })
+  .strict()
+  .optional();
 
 /**
  * Per-account configuration.
@@ -160,6 +173,8 @@ export const FeishuAccountConfigSchema = z
     renderMode: RenderModeSchema,
     streaming: StreamingModeSchema,
     tools: FeishuToolsConfigSchema,
+    // User OAuth for external doc reading
+    userAuth: FeishuUserAuthSchema,
   })
   .strict();
 
