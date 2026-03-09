@@ -44,6 +44,25 @@ async function getToken(creds: Credentials): Promise<string> {
   return data.tenant_access_token;
 }
 
+export function mergeStreamingText(
+  previousText: string | undefined,
+  nextText: string | undefined,
+): string {
+  const previous = typeof previousText === "string" ? previousText : "";
+  const next = typeof nextText === "string" ? nextText : "";
+  if (!next) {
+    return previous;
+  }
+  if (!previous || next === previous || next.includes(previous)) {
+    return next;
+  }
+  if (previous.includes(next)) {
+    return previous;
+  }
+  // Fallback for fragmented partial chunks: append to avoid losing tokens.
+  return `${previous}${next}`;
+}
+
 function truncateSummary(text: string, max = 50): string {
   if (!text) {
     return "";
@@ -72,6 +91,7 @@ export class FeishuStreamingSession {
   async start(
     receiveId: string,
     receiveIdType: "open_id" | "user_id" | "union_id" | "email" | "chat_id" = "chat_id",
+    replyToMessageId?: string,
   ): Promise<void> {
     if (this.state) {
       return;
@@ -108,14 +128,16 @@ export class FeishuStreamingSession {
     }
     const cardId = createData.data.card_id;
 
-    const sendRes = await this.client.im.message.create({
-      params: { receive_id_type: receiveIdType },
-      data: {
-        receive_id: receiveId,
-        msg_type: "interactive",
-        content: JSON.stringify({ type: "card", data: { card_id: cardId } }),
-      },
-    });
+    const cardContent = JSON.stringify({ type: "card", data: { card_id: cardId } });
+    const sendRes = replyToMessageId
+      ? await this.client.im.message.reply({
+          path: { message_id: replyToMessageId },
+          data: { msg_type: "interactive", content: cardContent },
+        })
+      : await this.client.im.message.create({
+          params: { receive_id_type: receiveIdType },
+          data: { receive_id: receiveId, msg_type: "interactive", content: cardContent },
+        });
     if (sendRes.code !== 0 || !sendRes.data?.message_id) {
       throw new Error(`Send card failed: ${sendRes.msg}`);
     }
@@ -128,9 +150,13 @@ export class FeishuStreamingSession {
     if (!this.state || this.closed) {
       return;
     }
+    const mergedInput = mergeStreamingText(this.pendingText ?? this.state.currentText, text);
+    if (!mergedInput || mergedInput === this.state.currentText) {
+      return;
+    }
     const now = Date.now();
     if (now - this.lastUpdateTime < this.updateThrottleMs) {
-      this.pendingText = text;
+      this.pendingText = mergedInput;
       return;
     }
     this.pendingText = null;
@@ -140,7 +166,11 @@ export class FeishuStreamingSession {
       if (!this.state || this.closed) {
         return;
       }
-      this.state.currentText = text;
+      const mergedText = mergeStreamingText(this.state.currentText, mergedInput);
+      if (!mergedText || mergedText === this.state.currentText) {
+        return;
+      }
+      this.state.currentText = mergedText;
       this.state.sequence += 1;
       const apiBase = resolveApiBase(this.creds.domain);
       await fetch(`${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/content/content`, {
@@ -150,7 +180,7 @@ export class FeishuStreamingSession {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          content: text,
+          content: mergedText,
           sequence: this.state.sequence,
           uuid: `s_${this.state.cardId}_${this.state.sequence}`,
         }),
@@ -166,7 +196,8 @@ export class FeishuStreamingSession {
     this.closed = true;
     await this.queue;
 
-    const text = finalText ?? this.pendingText ?? this.state.currentText;
+    const pendingMerged = mergeStreamingText(this.state.currentText, this.pendingText ?? undefined);
+    const text = finalText ? mergeStreamingText(pendingMerged, finalText) : pendingMerged;
     const apiBase = resolveApiBase(this.creds.domain);
 
     if (text && text !== this.state.currentText) {

@@ -3,6 +3,7 @@ import { createFeishuClient } from "./client.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { resolveReceiveIdType, normalizeFeishuTarget } from "./targets.js";
+import { parseFeishuMediaDurationMs } from "./media-duration.js";
 import fs from "fs";
 import path from "path";
 import os from "os";
@@ -236,6 +237,7 @@ export async function uploadImageFeishu(params: {
   return { imageKey };
 }
 
+
 /**
  * Upload a file to Feishu and get a file_key for sending.
  * Max file size: 30MB
@@ -354,11 +356,14 @@ export async function sendFileFeishu(params: {
   cfg: ClawdbotConfig;
   to: string;
   fileKey: string;
-  msgType?: "file" | "media";
+  /** Use "audio" for audio, "media" for video, "file" for documents */
+  msgType?: "file" | "audio" | "media";
+  /** Optional cover image key for video (msg_type "media") messages */
+  imageKey?: string;
   replyToMessageId?: string;
   accountId?: string;
 }): Promise<SendMediaResult> {
-  const { cfg, to, fileKey, replyToMessageId, accountId } = params;
+  const { cfg, to, fileKey, imageKey, replyToMessageId, accountId } = params;
   const msgType = params.msgType ?? "file";
   const account = resolveFeishuAccount({ cfg, accountId });
   if (!account.configured) {
@@ -372,7 +377,10 @@ export async function sendFileFeishu(params: {
   }
 
   const receiveIdType = resolveReceiveIdType(receiveId);
-  const content = JSON.stringify({ file_key: fileKey });
+  const content = JSON.stringify({
+    file_key: fileKey,
+    ...(imageKey && { image_key: imageKey }),
+  });
 
   if (replyToMessageId) {
     const response = await client.im.message.reply({
@@ -420,12 +428,27 @@ export function detectFileType(
 ): "opus" | "mp4" | "pdf" | "doc" | "xls" | "ppt" | "stream" {
   const ext = path.extname(fileName).toLowerCase();
   switch (ext) {
+    // Audio formats → Feishu "opus" category
     case ".opus":
     case ".ogg":
+    case ".mp3":
+    case ".m4a":
+    case ".aac":
+    case ".wav":
+    case ".flac":
+    case ".wma":
+    case ".amr":
       return "opus";
+    // Video formats → Feishu "mp4" category
     case ".mp4":
     case ".mov":
     case ".avi":
+    case ".mkv":
+    case ".webm":
+    case ".flv":
+    case ".wmv":
+    case ".m4v":
+    case ".3gp":
       return "mp4";
     case ".pdf":
       return "pdf";
@@ -443,6 +466,7 @@ export function detectFileType(
   }
 }
 
+
 /**
  * Upload and send media (image or file) from URL, local path, or buffer
  */
@@ -453,9 +477,10 @@ export async function sendMediaFeishu(params: {
   mediaBuffer?: Buffer;
   fileName?: string;
   replyToMessageId?: string;
+  mediaLocalRoots?: readonly string[];
   accountId?: string;
 }): Promise<SendMediaResult> {
-  const { cfg, to, mediaUrl, mediaBuffer, fileName, replyToMessageId, accountId } = params;
+  const { cfg, to, mediaUrl, mediaBuffer, fileName, replyToMessageId, mediaLocalRoots, accountId } = params;
   const account = resolveFeishuAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
@@ -464,17 +489,25 @@ export async function sendMediaFeishu(params: {
 
   let buffer: Buffer;
   let name: string;
+  let contentType: string | undefined;
 
   if (mediaBuffer) {
     buffer = mediaBuffer;
     name = fileName ?? "file";
   } else if (mediaUrl) {
+    const configLocalRoots = (account.config?.mediaLocalRoots ?? [])
+      .map((root) => root.trim())
+      .filter((root) => root.length > 0);
+    // Merge context-provided roots (includes agent workspace) with config roots.
+    const mergedLocalRoots = [...(mediaLocalRoots ?? []), ...configLocalRoots];
     const loaded = await getFeishuRuntime().media.loadWebMedia(mediaUrl, {
       maxBytes: mediaMaxBytes,
       optimizeImages: false,
+      ...(mergedLocalRoots.length > 0 ? { localRoots: mergedLocalRoots } : {}),
     });
     buffer = loaded.buffer;
     name = fileName ?? loaded.fileName ?? "file";
+    contentType = loaded.contentType;
   } else {
     throw new Error("Either mediaUrl or mediaBuffer must be provided");
   }
@@ -487,20 +520,32 @@ export async function sendMediaFeishu(params: {
     const { imageKey } = await uploadImageFeishu({ cfg, image: buffer, accountId });
     return sendImageFeishu({ cfg, to, imageKey, replyToMessageId, accountId });
   } else {
-    const fileType = detectFileType(name);
+    // Determine file type from extension; fall back to MIME type for files without
+    // a recognized extension (e.g. URLs with no filename, or buffers without fileName).
+    let fileType = detectFileType(name);
+    if (fileType === "stream" && contentType) {
+      if (contentType.startsWith("video/")) fileType = "mp4";
+      else if (contentType.startsWith("audio/")) fileType = "opus";
+    }
+    const msgType = fileType === "opus" ? "audio" : fileType === "mp4" ? "media" : "file";
+    const duration =
+      fileType === "opus" || fileType === "mp4"
+        ? parseFeishuMediaDurationMs(buffer, fileType)
+        : undefined;
     const { fileKey } = await uploadFileFeishu({
       cfg,
       file: buffer,
       fileName: name,
       fileType,
+      duration,
       accountId,
     });
-    const isMedia = fileType === "mp4" || fileType === "opus";
+    // Feishu requires msg_type "audio" for audio, "media" for video, "file" for documents
     return sendFileFeishu({
       cfg,
       to,
       fileKey,
-      msgType: isMedia ? "media" : "file",
+      msgType,
       replyToMessageId,
       accountId,
     });
