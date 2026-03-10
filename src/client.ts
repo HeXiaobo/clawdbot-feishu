@@ -115,6 +115,10 @@ export function initUserTokenCache(accountId: string, userAuth: FeishuUserAuth, 
   });
 }
 
+export function clearUserTokenCache(accountId: string): void {
+  userTokenCache.delete(accountId);
+}
+
 /**
  * Get user access token (with auto-refresh if needed)
  */

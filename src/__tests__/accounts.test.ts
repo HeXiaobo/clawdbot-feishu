@@ -1,5 +1,6 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { clearUserTokenCache, initUserTokenCache } from "../client.js";
 import {
   listEnabledFeishuAccounts,
   listFeishuAccountIds,
@@ -8,7 +9,16 @@ import {
   resolveFeishuCredentials,
 } from "../accounts.js";
 
+vi.mock("../client.js", () => ({
+  initUserTokenCache: vi.fn(),
+  clearUserTokenCache: vi.fn(),
+}));
+
 describe("accounts contract", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   describe("listFeishuAccountIds", () => {
     it("Given single-account mode, When accounts map is absent, Then returns default account id", () => {
       const cfg = { channels: { feishu: {} } } as any;
@@ -147,6 +157,81 @@ describe("accounts contract", () => {
       } as any;
       const resolved = resolveFeishuAccount({ cfg, accountId: "teama" });
       expect(resolved.enabled).toBe(false);
+    });
+
+    it("Given enabled user auth, When resolving account, Then initializes the user token cache", () => {
+      const cfg = {
+        channels: {
+          feishu: {
+            appId: "base-app",
+            appSecret: "base-secret",
+            accounts: {
+              teama: {
+                userAuth: {
+                  enabled: true,
+                  accessToken: "token",
+                  refreshToken: "refresh",
+                },
+              },
+            },
+          },
+        },
+      } as any;
+
+      resolveFeishuAccount({ cfg, accountId: "teama" });
+
+      expect(initUserTokenCache).toHaveBeenCalledWith(
+        "teama",
+        expect.objectContaining({ enabled: true, accessToken: "token" }),
+        expect.objectContaining({
+          appId: "base-app",
+          appSecret: "base-secret",
+          domain: "feishu",
+        }),
+      );
+      expect(clearUserTokenCache).not.toHaveBeenCalled();
+    });
+
+    it("Given disabled user auth, When resolving account, Then clears any cached user token", () => {
+      const cfg = {
+        channels: {
+          feishu: {
+            appId: "base-app",
+            appSecret: "base-secret",
+            accounts: {
+              teama: {
+                userAuth: {
+                  enabled: false,
+                },
+              },
+            },
+          },
+        },
+      } as any;
+
+      resolveFeishuAccount({ cfg, accountId: "teama" });
+
+      expect(clearUserTokenCache).toHaveBeenCalledWith("teama");
+      expect(initUserTokenCache).not.toHaveBeenCalled();
+    });
+
+    it("Given removed user auth, When resolving account, Then clears any cached user token", () => {
+      const cfg = {
+        channels: {
+          feishu: {
+            appId: "base-app",
+            appSecret: "base-secret",
+            accounts: {
+              teama: {},
+            },
+          },
+        },
+      } as any;
+
+      resolveFeishuAccount({ cfg, accountId: "teama" });
+
+      expect(clearUserTokenCache).toHaveBeenCalledWith("teama");
+      expect(initUserTokenCache).not.toHaveBeenCalled();
     });
   });
 

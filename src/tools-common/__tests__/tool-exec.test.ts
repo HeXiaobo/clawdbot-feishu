@@ -1,6 +1,6 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createFeishuClient } from "../../client.js";
+import { createFeishuClient, getUserAccessToken } from "../../client.js";
 import { runWithFeishuToolContext } from "../tool-context.js";
 import {
   hasFeishuToolEnabledForAnyAccount,
@@ -10,6 +10,8 @@ import {
 
 vi.mock("../../client.js", () => ({
   createFeishuClient: vi.fn(() => ({ kind: "mock-client" })),
+  getUserAccessToken: vi.fn(),
+  clearUserTokenCache: vi.fn(),
 }));
 
 describe("tool-exec contract", () => {
@@ -141,5 +143,72 @@ describe("tool-exec contract", () => {
 
     expect(result).toBe("done");
     expect(vi.mocked(createFeishuClient)).toHaveBeenCalledTimes(1);
+  });
+
+  it("Given user-token execution fails, When fallback is disabled, Then does not rerun side effects with tenant token", async () => {
+    vi.mocked(getUserAccessToken).mockResolvedValue("user-token");
+    const run = vi.fn(async () => {
+      throw new Error("write failed after side effect");
+    });
+
+    await expect(
+      withFeishuToolClient({
+        api: {
+          config: {
+            channels: {
+              feishu: {
+                enabled: true,
+                appId: "id",
+                appSecret: "secret",
+              },
+            },
+          },
+          logger: {},
+        } as any,
+        toolName: "feishu_sheet",
+        useUserToken: true,
+        run,
+      }),
+    ).rejects.toThrowError("write failed after side effect");
+
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("Given user-token execution fails, When fallback is enabled, Then retries with tenant token once", async () => {
+    vi.mocked(getUserAccessToken).mockResolvedValue("user-token");
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("user token rejected"))
+      .mockResolvedValueOnce("tenant-success");
+
+    const result = await withFeishuToolClient({
+      api: {
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "id",
+              appSecret: "secret",
+            },
+          },
+        },
+        logger: { debug: vi.fn() },
+      } as any,
+      toolName: "feishu_doc",
+      useUserToken: true,
+      allowUserTokenFallback: true,
+      run,
+    });
+
+    expect(result).toBe("tenant-success");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ userAccessToken: "user-token" }),
+    );
+    expect(run).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ userAccessToken: undefined, userTokenClient: undefined }),
+    );
   });
 });
