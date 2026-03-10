@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../client.js", () => ({
   createFeishuClient: vi.fn(),
+  clearUserTokenCache: vi.fn(),
 }));
 
 import { createFeishuClient } from "../client.js";

@@ -47,6 +47,7 @@ async function setupHarness(params?: {
         },
       },
     })),
+    clearUserTokenCache: vi.fn(),
   }));
 
   const runtimeMod = await import("../runtime.js");

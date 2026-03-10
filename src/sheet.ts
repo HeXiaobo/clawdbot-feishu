@@ -1,9 +1,11 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import type { ResolvedFeishuAccount } from "./types.js";
 import { FeishuSheetSchema, type FeishuSheetParams } from "./sheet-schema.js";
-import { resolveToolsConfig } from "./tools-config.js";
-import { withFeishuToolClient, type UserTokenHttpClient } from "./tools-common/tool-exec.js";
-import { listEnabledFeishuAccounts } from "./accounts.js";
+import {
+  hasFeishuToolEnabledForAnyAccount,
+  withFeishuToolClient,
+  type UserTokenHttpClient,
+} from "./tools-common/tool-exec.js";
 
 // ============ Helpers ============
 
@@ -250,16 +252,12 @@ export function registerFeishuSheetTools(api: OpenClawPluginApi) {
     return;
   }
 
-  const accounts = listEnabledFeishuAccounts(api.config);
-  if (accounts.length === 0) {
+  if (!hasFeishuToolEnabledForAnyAccount(api.config)) {
     api.logger.debug?.("feishu_sheet: No Feishu accounts configured, skipping sheet tools");
     return;
   }
 
-  const firstAccount = accounts[0];
-  const toolsCfg = resolveToolsConfig(firstAccount.config.tools);
-
-  if (!toolsCfg.sheet) {
+  if (!hasFeishuToolEnabledForAnyAccount(api.config, "sheet")) {
     api.logger.debug?.("feishu_sheet: sheet tool disabled in config");
     return;
   }
@@ -282,6 +280,7 @@ export function registerFeishuSheetTools(api: OpenClawPluginApi) {
             toolName: "feishu_sheet",
             requiredTool: "sheet",
             useUserToken: p.useUserToken,
+            allowUserTokenFallback: p.action !== "write_range",
             run: async ({ account, userTokenClient }) => {
               const httpClient = userTokenClient ?? (await createTenantHttpClient(account));
 

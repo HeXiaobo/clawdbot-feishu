@@ -73,7 +73,7 @@ export function registerFeishuCalendarTools(api: OpenClawPluginApi) {
     label: "Feishu Calendar List Events",
     description: "List calendar events",
     parameters: CalendarListEventsSchema,
-    run: (client, params) => listCalendarEvents(client, params),
+    run: (client, params, options) => listCalendarEvents(client, params, options),
   });
 
   registerCalendarTool<CalendarCreateEventParams>(api, {
@@ -81,7 +81,7 @@ export function registerFeishuCalendarTools(api: OpenClawPluginApi) {
     label: "Feishu Calendar Create Event",
     description: "Create a calendar event",
     parameters: CalendarCreateEventSchema,
-    run: (client, params) => createCalendarEvent(client, params),
+    run: (client, params, options) => createCalendarEvent(client, params, options),
   });
 
   registerCalendarTool<CalendarUpdateEventParams>(api, {
@@ -89,7 +89,7 @@ export function registerFeishuCalendarTools(api: OpenClawPluginApi) {
     label: "Feishu Calendar Update Event",
     description: "Update a calendar event",
     parameters: CalendarUpdateEventSchema,
-    run: (client, params) => updateCalendarEvent(client, params),
+    run: (client, params, options) => updateCalendarEvent(client, params, options),
   });
 
   registerCalendarTool<CalendarDeleteEventParams>(api, {
@@ -97,7 +97,7 @@ export function registerFeishuCalendarTools(api: OpenClawPluginApi) {
     label: "Feishu Calendar Delete Event",
     description: "Delete a calendar event (requires confirm=true)",
     parameters: CalendarDeleteEventSchema,
-    run: (client, params) => deleteCalendarEvent(client, params),
+    run: (client, params, options) => deleteCalendarEvent(client, params, options),
   });
 
   api.logger.debug?.("feishu_calendar: Registered 4 calendar tools");

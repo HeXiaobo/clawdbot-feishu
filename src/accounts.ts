@@ -1,7 +1,7 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk";
 import type { FeishuConfig, FeishuAccountConfig, FeishuDomain, ResolvedFeishuAccount } from "./types.js";
-import { initUserTokenCache } from "./client.js";
+import { clearUserTokenCache, initUserTokenCache } from "./client.js";
 
 /**
  * List all configured account IDs from the accounts field.
@@ -138,6 +138,8 @@ export function resolveFeishuAccount(params: {
       appSecret: creds.appSecret,
       domain: creds.domain,
     });
+  } else {
+    clearUserTokenCache(accountId);
   }
 
   return result;

@@ -47,35 +47,42 @@ export interface UserTokenHttpClient {
   put: (url: string, body?: any) => Promise<any>;
 }
 
+function resolveOpenApiBase(domain?: string): string {
+  if (!domain || domain === "feishu") return "https://open.feishu.cn";
+  if (domain === "lark") return "https://open.larksuite.com";
+  if (domain.startsWith("http://") || domain.startsWith("https://")) return domain.replace(/\/+$/, "");
+  return `https://${domain.replace(/\/+$/, "")}`;
+}
+
 /**
  * Create HTTP client with user token
  */
 function createUserTokenClient(userToken: string, domain: string): UserTokenHttpClient {
-  const baseUrl = domain.startsWith("http") ? domain : `https://${domain}`;
-  
+  const baseUrl = resolveOpenApiBase(domain);
+
   async function request(method: string, url: string, body?: any): Promise<any> {
     const fullUrl = url.startsWith("http") ? url : `${baseUrl}${url}`;
     const headers: Record<string, string> = {
       "Authorization": `Bearer ${userToken}`,
       "Content-Type": "application/json",
     };
-    
+
     const fetchOptions: RequestInit = { method, headers };
-    
+
     if (body) {
       fetchOptions.body = typeof body === "string" ? body : JSON.stringify(body);
     }
-    
+
     const response = await fetch(fullUrl, fetchOptions);
     const data = await response.json();
-    
+
     if (!response.ok || data.code !== 0) {
       throw new Error(data.msg || `HTTP ${response.status}`);
     }
-    
+
     return data;
   }
-  
+
   return {
     get: (url: string) => request("GET", url),
     post: (url: string, body?: any) => request("POST", url, body),
@@ -84,13 +91,14 @@ function createUserTokenClient(userToken: string, domain: string): UserTokenHttp
 }
 
 /**
- * Execute tool with user token (for external docs) with fallback to tenant token
+ * Execute tool with user token (for external docs) and optional tenant-token fallback.
  */
 export async function withFeishuToolClient<T>(params: {
   api: OpenClawPluginApi;
   toolName: string;
   requiredTool?: FeishuToolFlag;
   useUserToken?: boolean; // Enable user token for external doc reading
+  allowUserTokenFallback?: boolean;
   run: (args: {
     client: Lark.Client;
     account: ResolvedFeishuAccount;
@@ -124,34 +132,39 @@ export async function withFeishuToolClient<T>(params: {
 
   // Check if user token should be used (for external doc reading)
   let userTokenClient: UserTokenHttpClient | undefined;
-  
-  if (params.useUserToken) {
-    try {
-      const userToken = await getUserAccessToken(account.accountId);
-      if (userToken) {
-        const domain = account.domain === "lark" ? "https://open.larksuite.com" : "https://open.feishu.cn";
-        userTokenClient = createUserTokenClient(userToken, domain);
 
-        // Try with user token first
-        try {
-          return await params.run({
-            client: createFeishuClient(account),
-            account,
-            userTokenClient,
-            userAccessToken: userToken,
-          });
-        } catch (userTokenErr) {
-          // User token failed, log and fallback to tenant token
-          params.api.logger.debug?.(
-            `User token failed for ${params.toolName}, falling back to tenant token: ${userTokenErr}`,
-          );
-          userTokenClient = undefined;
-        }
-      } else {
-        params.api.logger.debug?.(`User token unavailable for ${params.toolName}, using tenant token`);
-      }
+  if (params.useUserToken) {
+    let userToken: string | null = null;
+    try {
+      userToken = await getUserAccessToken(account.accountId);
     } catch (err) {
       params.api.logger.debug?.(`User token error for ${params.toolName}: ${err}`);
+    }
+
+    if (userToken) {
+      userTokenClient = createUserTokenClient(userToken, account.domain);
+
+      // Try with user token first
+      try {
+        return await params.run({
+          client: createFeishuClient(account),
+          account,
+          userTokenClient,
+          userAccessToken: userToken,
+        });
+      } catch (userTokenErr) {
+        if (!params.allowUserTokenFallback) {
+          throw userTokenErr;
+        }
+
+        // User token failed, log and fallback to tenant token
+        params.api.logger.debug?.(
+          `User token failed for ${params.toolName}, falling back to tenant token: ${userTokenErr}`,
+        );
+        userTokenClient = undefined;
+      }
+    } else {
+      params.api.logger.debug?.(`User token unavailable for ${params.toolName}, using tenant token`);
     }
   }
 

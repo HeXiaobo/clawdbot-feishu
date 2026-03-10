@@ -40,7 +40,10 @@ vi.mock("../send.js", () => ({
   sendMessageFeishu: sendMessageFeishuMock,
   sendMarkdownCardFeishu: sendMarkdownCardFeishuMock,
 }));
-vi.mock("../client.js", () => ({ createFeishuClient: createFeishuClientMock }));
+vi.mock("../client.js", () => ({
+  createFeishuClient: createFeishuClientMock,
+  clearUserTokenCache: vi.fn(),
+}));
 vi.mock("../targets.js", () => ({ resolveReceiveIdType: resolveReceiveIdTypeMock }));
 vi.mock("../typing.js", () => ({
   addTypingIndicator: addTypingIndicatorMock,
